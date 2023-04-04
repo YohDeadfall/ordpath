@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-pub struct Stage {
+struct Stage {
     prefix_len: u8,
     prefix: u8,
     value_len: u8,
