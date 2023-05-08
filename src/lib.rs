@@ -1,4 +1,220 @@
+use std::alloc::Layout;
 use std::cmp::Ordering;
+use std::mem::MaybeUninit;
+use std::ops::{Shl, Shr};
+
+struct OrdPath<E: Encoding = Default> {
+    enc: E,
+    len: usize,
+    data: OrdPathData,
+}
+
+impl<E: Encoding> OrdPath<E> {
+    fn with_capacity(n: usize, enc: E) -> OrdPath<E> {
+        let data = unsafe {
+            if n > 1 {
+                OrdPathData {
+                    heap: std::alloc::alloc(Self::layout(n)) as *const u64,
+                }
+            } else {
+                OrdPathData {
+                    inline: MaybeUninit::uninit().assume_init(),
+                }
+            }
+        };
+
+        OrdPath { enc, len: n, data }
+    }
+
+    fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
+        let mut len = 0usize;
+        let mut acc = 0usize;
+
+        for value in s {
+            acc += enc.stage_by_value(*value).unwrap().len() as usize;
+
+            const ACC_LIMIT: usize = usize::MAX - 8 - 64;
+
+            if acc > ACC_LIMIT {
+                len += acc / u64::BITS as usize;
+                acc -= ACC_LIMIT;
+            }
+        }
+
+        if acc > 0 || len > 0 {
+            acc += 1;
+            len += (acc - 1) / u64::BITS as usize + 1;
+        }
+
+        let path = OrdPath::with_capacity(len, enc);
+        let mut ptr = path.ptr() as *mut u64;
+        let mut acc = 0u64;
+        let mut len = 0u8;
+
+        for value in s {
+            let value = *value;
+            let stage = path.encoding().stage_by_value(value).unwrap();
+
+            let prefix = stage.prefix() as u64;
+            let value = (value - stage.value_low()) as u64;
+
+            let buf = match stage.len() < 64 {
+                true => (prefix.shl(stage.value_len()) | value).shl(64 - stage.len()),
+                false => prefix.shl(64 - stage.prefix_len()) | value.shr(stage.len() - 64),
+            };
+
+            acc |= buf >> len;
+            len += stage.len();
+
+            if len > 64 {
+                unsafe {
+                    ptr.write(acc.to_be());
+                    ptr = ptr.add(1);
+                }
+
+                len -= 64;
+                acc = match stage.len() <= 64 {
+                    true => buf.shl(stage.len() - len),
+                    false => value.shl(stage.len() - len),
+                };
+            }
+        }
+
+        if len < 64 {
+            acc |= 1 << (63 - len);
+        } else {
+            unsafe {
+                ptr.add(1).write(1 << 63);
+            }
+        }
+
+        unsafe {
+            ptr.write(acc.to_be());
+        }
+
+        path
+    }
+
+    fn spilled(&self) -> bool {
+        self.len > 1
+    }
+
+    fn encoding(&self) -> &E {
+        &self.enc
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn ptr(&self) -> *const u64 {
+        unsafe {
+            if self.spilled() {
+                self.data.heap
+            } else {
+                self.data.inline.as_ptr()
+            }
+        }
+    }
+
+    fn layout(n: usize) -> Layout {
+        unsafe { Layout::array::<u64>(n).unwrap_unchecked() }
+    }
+}
+
+impl<E: Encoding> Drop for OrdPath<E> {
+    fn drop(&mut self) {
+        unsafe {
+            if self.spilled() {
+                std::alloc::dealloc(self.ptr() as *mut u8, Self::layout(self.len));
+            }
+        }
+    }
+}
+
+impl<E: Encoding> IntoIterator for OrdPath<E> {
+    type IntoIter = IntoIter<E>;
+    type Item = i64;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter::<E> {
+            path: self,
+            pos: 0,
+            acc: 0,
+            len: 0,
+        }
+    }
+}
+
+union OrdPathData {
+    inline: [u64; 1],
+    heap: *const u64,
+}
+
+struct IntoIter<E: Encoding> {
+    path: OrdPath<E>,
+    pos: usize,
+    acc: u64,
+    len: u8,
+}
+
+impl<E: Encoding> Iterator for IntoIter<E> {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let prefix = (self.acc >> 56) as u8;
+        let stage = self.path.encoding().stage_by_prefix(prefix);
+
+        if let Some(stage) = stage {
+            if stage.len() <= self.len {
+                let value = (self.acc << stage.prefix_len()) >> (64 - stage.value_len());
+
+                self.acc <<= stage.len();
+                self.len -= stage.len();
+
+                return Some(value as i64 + stage.value_low());
+            }
+        }
+
+        let left = self.path.len() - self.pos;
+
+        if left > 0 {
+            let acc_prev = self.acc;
+            let mut acc_next = unsafe { self.path.ptr().add(self.pos).read() };
+
+            if cfg!(target_endian = "little") {
+                acc_next = acc_next.swap_bytes();
+            }
+
+            let acc = acc_prev | acc_next >> self.len;
+            let len = self.len
+                + match left {
+                    1 => 64 - acc_next.trailing_zeros() - 1,
+                    _ => 64,
+                } as u8;
+
+            let prefix = (acc >> 56) as u8;
+            let stage = self
+                .path
+                .encoding()
+                .stage_by_prefix(prefix)
+                .expect("unknown_prefix");
+
+            self.pos += 1;
+
+            if stage.len() <= len {
+                let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
+
+                self.acc = acc_next << (stage.len() - self.len);
+                self.len = len - stage.len();
+
+                return Some(value as i64 + stage.value_low());
+            }
+        }
+
+        None
+    }
+}
 
 struct Stage {
     prefix_len: u8,
@@ -38,6 +254,10 @@ impl Stage {
 
     const fn value_len(&self) -> u8 {
         self.value_len
+    }
+
+    const fn len(&self) -> u8 {
+        self.prefix_len() + self.value_len()
     }
 }
 
@@ -103,10 +323,10 @@ macro_rules! encoding {
                     let mut data = 0;
                     while data < 1 << prefix_offset {
                         lookup[(prefix | data) as usize] = index as u8;
-                        data +=1;
+                        data += 1;
                     }
 
-                    index +=1;
+                    index += 1;
                 }
 
                 lookup
@@ -163,6 +383,41 @@ encoding!(pub Default: [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_from_slice() {
+        fn assert_path(s: &[i64]) {
+            assert_eq!(
+                OrdPath::from_slice(s, Default {})
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                s
+            );
+        }
+
+        assert_path(&[0; 0]);
+        assert_path(&[0]);
+        assert_path(&[0, 8]);
+        assert_path(&[4440, 4440, 4440, 8]);
+        assert_path(&[4440, 4440, 4440, 8, 0]);
+        assert_path(&[4440, 4440, 4440, 4440]);
+        assert_path(&[4440, 4440, 4440, 4440, 88]);
+        assert_path(&[4295037272, 4295037272]);
+        assert_path(&[4295037272, 4295037272, 4440, 88]);
+        assert_path(&[4295037272, 4295037272, 4440, 344]);
+        assert_path(&[4295037272, 4295037272, 4440, 4440]);
+
+        assert_path(&[0 + 3]);
+        assert_path(&[0 + 3, 8 + 5]);
+        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11]);
+        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11, 0 + 3]);
+        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123]);
+        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123, 88 + 11]);
+        assert_path(&[4295037272 + 31, 4295037272 + 6793]);
+        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 88 + 11]);
+        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 344 + 71]);
+        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 4440 + 123]);
+    }
 
     #[test]
     fn default_encoding() {
