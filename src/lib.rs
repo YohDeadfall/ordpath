@@ -17,9 +17,7 @@ impl<E: Encoding> OrdPath<E> {
                     heap: std::alloc::alloc(Self::layout(n)) as *const u64,
                 }
             } else {
-                OrdPathData {
-                    inline: MaybeUninit::uninit().assume_init(),
-                }
+                MaybeUninit::uninit().assume_init()
             }
         };
 
