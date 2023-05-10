@@ -115,8 +115,47 @@ impl<E: Encoding> OrdPath<E> {
         }
     }
 
+    fn as_slice(&self) -> &[u64] {
+        unsafe { std::slice::from_raw_parts(self.ptr(), self.len()) }
+    }
+
+    fn as_slice_and_last(&self) -> Option<(&[u64], u64)> {
+        match self.len() {
+            0 => None,
+            l => unsafe {
+                let slice = std::slice::from_raw_parts(self.ptr(), l - 1);
+                let last = self.ptr().add(l - 1).read();
+
+                Some((
+                    slice,
+                    last & u64::MAX.wrapping_shl(last.trailing_zeros() + 1),
+                ))
+            },
+        }
+    }
+
     fn layout(n: usize) -> Layout {
         unsafe { Layout::array::<u64>(n).unwrap_unchecked() }
+    }
+}
+
+impl<E: Encoding> PartialEq for OrdPath<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<E: Encoding> Eq for OrdPath<E> {}
+
+impl<E: Encoding> PartialOrd for OrdPath<E> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<E: Encoding> Ord for OrdPath<E> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_slice_and_last().cmp(&other.as_slice_and_last())
     }
 }
 
@@ -415,6 +454,25 @@ mod tests {
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 88 + 11]);
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 344 + 71]);
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 4440 + 123]);
+    }
+
+    #[test]
+    fn path_ordering() {
+        fn cmp(left: &[i64], right: &[i64]) -> Ordering {
+            let left = OrdPath::from_slice(left, Default {});
+            let right = OrdPath::from_slice(right, Default {});
+
+            left.cmp(&right)
+        }
+
+        assert_eq!(cmp(&[0; 0], &[0; 0]), Ordering::Equal);
+        assert_eq!(cmp(&[0; 0], &[0]), Ordering::Less);
+        assert_eq!(cmp(&[0], &[0; 0]), Ordering::Greater);
+        assert_eq!(cmp(&[0], &[0]), Ordering::Equal);
+        assert_eq!(cmp(&[0], &[1]), Ordering::Less);
+        assert_eq!(cmp(&[0], &[0, 1]), Ordering::Less);
+        assert_eq!(cmp(&[0], &[69976, 69976]), Ordering::Less);
+        assert_eq!(cmp(&[0], &[4295037272, 4295037272]), Ordering::Less);
     }
 
     #[test]
