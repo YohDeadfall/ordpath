@@ -1,7 +1,16 @@
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::mem::MaybeUninit;
+use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
+
+struct ParseError;
+
+impl From<ParseIntError> for ParseError {
+    fn from(_: ParseIntError) -> Self {
+        ParseError {}
+    }
+}
 
 struct OrdPath<E: Encoding = Default> {
     enc: E,
@@ -22,6 +31,14 @@ impl<E: Encoding> OrdPath<E> {
         };
 
         OrdPath { enc, len: n, data }
+    }
+
+    fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, ParseError> {
+        let mut v = Vec::new();
+        for x in s.split_terminator('.') {
+            v.push(i64::from_str_radix(x, 10)?);
+        }
+        Ok(Self::from_slice(&v, enc))
     }
 
     fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
@@ -454,6 +471,26 @@ mod tests {
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 88 + 11]);
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 344 + 71]);
         assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 4440 + 123]);
+    }
+
+    #[test]
+    fn path_from_str() {
+        fn assert_path(s: &str, r: Option<Vec<i64>>) {
+            assert!(
+                OrdPath::from_str(s, Default {})
+                    .map(|p| p.into_iter().collect::<Vec<_>>())
+                    .ok()
+                    == r
+            );
+        }
+
+        assert_path("", Some(vec![]));
+        assert_path("0", Some(vec![0]));
+        assert_path("1", Some(vec![1]));
+        assert_path("1.2", Some(vec![1, 2]));
+        assert_path("1.a", None);
+        assert_path("1_2", None);
+        assert_path("a", None);
     }
 
     #[test]
