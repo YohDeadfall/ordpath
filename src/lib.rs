@@ -186,8 +186,8 @@ impl<E: Encoding> Drop for OrdPath<E> {
     }
 }
 
-impl<E: Encoding> IntoIterator for OrdPath<E> {
-    type IntoIter = IntoIter<E>;
+impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
+    type IntoIter = IntoIter<'a, E>;
     type Item = i64;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -205,14 +205,14 @@ union OrdPathData {
     heap: *const u64,
 }
 
-struct IntoIter<E: Encoding> {
-    path: OrdPath<E>,
+struct IntoIter<'a, E: Encoding> {
+    path: &'a OrdPath<E>,
     pos: usize,
     acc: u64,
     len: u8,
 }
 
-impl<E: Encoding> Iterator for IntoIter<E> {
+impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
     type Item = i64;
 
     fn next(&mut self) -> Option<Self::Item> {
