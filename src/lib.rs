@@ -1,5 +1,6 @@
 use std::alloc::Layout;
 use std::cmp::Ordering;
+use std::fmt::{Display, Error, Formatter};
 use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
@@ -183,6 +184,19 @@ impl<E: Encoding> Drop for OrdPath<E> {
                 std::alloc::dealloc(self.ptr() as *mut u8, Self::layout(self.len));
             }
         }
+    }
+}
+
+impl<E: Encoding> Display for OrdPath<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        let mut iterator = self.into_iter();
+        if let Some(value) = iterator.next() {
+            write!(f, "{}", value)?;
+            while let Some(value) = iterator.next() {
+                write!(f, ".{}", value)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -476,11 +490,11 @@ mod tests {
     #[test]
     fn path_from_str() {
         fn assert_path(s: &str, r: Option<Vec<i64>>) {
-            assert!(
+            assert_eq!(
                 OrdPath::from_str(s, Default {})
                     .map(|p| p.into_iter().collect::<Vec<_>>())
-                    .ok()
-                    == r
+                    .ok(),
+                r
             );
         }
 
@@ -491,6 +505,18 @@ mod tests {
         assert_path("1.a", None);
         assert_path("1_2", None);
         assert_path("a", None);
+    }
+
+    #[test]
+    fn path_to_string() {
+        fn assert_path(p: Vec<i64>, s: &str) {
+            assert_eq!(OrdPath::from_slice(&p, Default {}).to_string(), s);
+        }
+
+        assert_path(vec![], "");
+        assert_path(vec![0], "0");
+        assert_path(vec![1], "1");
+        assert_path(vec![1, 2], "1.2");
     }
 
     #[test]
