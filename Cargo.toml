@@ -1,8 +1,13 @@
 [package]
 name = "ordpath"
 version = "0.1.0"
+authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Implementation of ORDPATH encoding"
+homepage = "https://github.com/yohdeadfall/ordpath/"
+repository = "https://github.com/yohdeadfall/ordpath/"
+license = "MIT OR Apache-2.0"
+keywords = ["encoding", "ordering", "hierarchy"]
+categories = ["encoding"]
 
 [dependencies]
