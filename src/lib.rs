@@ -4,6 +4,7 @@ use std::fmt::{Display, Error, Formatter};
 use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
+use std::str::FromStr;
 
 #[macro_export]
 macro_rules! ordpath {
@@ -161,6 +162,14 @@ impl<E: Encoding> OrdPath<E> {
 
     fn layout(n: usize) -> Layout {
         unsafe { Layout::array::<u64>(n).unwrap_unchecked() }
+    }
+}
+
+impl FromStr for OrdPath<Default> {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_str(s, Default {})
     }
 }
 
