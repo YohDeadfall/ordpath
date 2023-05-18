@@ -5,6 +5,12 @@ use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 
+macro_rules! ordpath {
+    ($($x:expr),*$(,)*) => {
+        OrdPath::from_slice(&vec![$($x),*], Default {})
+    };
+}
+
 struct ParseError;
 
 impl From<ParseIntError> for ParseError {
