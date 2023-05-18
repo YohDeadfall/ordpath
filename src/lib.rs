@@ -5,13 +5,14 @@ use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 
+#[macro_export]
 macro_rules! ordpath {
     ($($x:expr),*$(,)*) => {
         OrdPath::from_slice(&vec![$($x),*], Default {})
     };
 }
 
-struct ParseError;
+pub struct ParseError;
 
 impl From<ParseIntError> for ParseError {
     fn from(_: ParseIntError) -> Self {
@@ -19,7 +20,7 @@ impl From<ParseIntError> for ParseError {
     }
 }
 
-struct OrdPath<E: Encoding = Default> {
+pub struct OrdPath<E: Encoding = Default> {
     enc: E,
     len: usize,
     data: OrdPathData,
@@ -40,7 +41,7 @@ impl<E: Encoding> OrdPath<E> {
         OrdPath { enc, len: n, data }
     }
 
-    fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, ParseError> {
+    pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, ParseError> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
             v.push(i64::from_str_radix(x, 10)?);
@@ -48,7 +49,7 @@ impl<E: Encoding> OrdPath<E> {
         Ok(Self::from_slice(&v, enc))
     }
 
-    fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
+    pub fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
         let mut len = 0usize;
         let mut acc = 0usize;
 
@@ -225,7 +226,7 @@ union OrdPathData {
     heap: *const u64,
 }
 
-struct IntoIter<'a, E: Encoding> {
+pub struct IntoIter<'a, E: Encoding> {
     path: &'a OrdPath<E>,
     pos: usize,
     acc: u64,
@@ -290,7 +291,7 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
     }
 }
 
-struct Stage {
+pub struct Stage {
     prefix_len: u8,
     prefix: u8,
     value_len: u8,
@@ -298,7 +299,7 @@ struct Stage {
 }
 
 impl Stage {
-    const fn new(prefix_len: u8, prefix: u8, value_len: u8, value_low: i64) -> Stage {
+    pub const fn new(prefix_len: u8, prefix: u8, value_len: u8, value_low: i64) -> Stage {
         assert!(prefix_len < 8);
         assert!(value_len < 64);
 
@@ -310,32 +311,32 @@ impl Stage {
         }
     }
 
-    const fn prefix(&self) -> u8 {
+    pub const fn prefix(&self) -> u8 {
         self.prefix
     }
 
-    const fn prefix_len(&self) -> u8 {
+    pub const fn prefix_len(&self) -> u8 {
         self.prefix_len
     }
 
-    const fn value_low(&self) -> i64 {
+    pub const fn value_low(&self) -> i64 {
         self.value_low
     }
 
-    const fn value_high(&self) -> i64 {
+    pub const fn value_high(&self) -> i64 {
         self.value_low + ((1 << self.value_len) - 1)
     }
 
-    const fn value_len(&self) -> u8 {
+    pub const fn value_len(&self) -> u8 {
         self.value_len
     }
 
-    const fn len(&self) -> u8 {
+    pub const fn len(&self) -> u8 {
         self.prefix_len() + self.value_len()
     }
 }
 
-trait Encoding {
+pub trait Encoding {
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage>;
     fn stage_by_value(&self, value: i64) -> Option<&Stage>;
 }
