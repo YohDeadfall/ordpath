@@ -173,6 +173,16 @@ impl FromStr for OrdPath<Default> {
     }
 }
 
+impl<E: Encoding + Clone> Clone for OrdPath<E> {
+    fn clone(&self) -> Self {
+        let clone = Self::with_capacity(self.len(), self.encoding().clone());
+        unsafe {
+            std::ptr::copy(self.ptr(), clone.ptr() as *mut u64, clone.len());
+        }
+        clone
+    }
+}
+
 impl<E: Encoding> PartialEq for OrdPath<E> {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice() == other.as_slice()
@@ -533,6 +543,21 @@ mod tests {
         assert_path(vec![0], "0");
         assert_path(vec![1], "1");
         assert_path(vec![1, 2], "1.2");
+    }
+
+    #[test]
+    fn path_clone() {
+        fn assert_path<E: Encoding + Clone>(p: OrdPath<E>) {
+            assert_eq!(
+                p.into_iter().collect::<Vec<_>>(),
+                p.clone().into_iter().collect::<Vec<_>>()
+            );
+        }
+
+        assert_path(ordpath![]);
+        assert_path(ordpath![0]);
+        assert_path(ordpath![1]);
+        assert_path(ordpath![1, 2]);
     }
 
     #[test]
