@@ -1,6 +1,6 @@
 use std::alloc::Layout;
 use std::cmp::Ordering;
-use std::fmt::{Display, Error, Formatter};
+use std::fmt;
 use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
@@ -13,6 +13,7 @@ macro_rules! ordpath {
     };
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError;
 
 impl From<ParseIntError> for ParseError {
@@ -213,8 +214,14 @@ impl<E: Encoding> Drop for OrdPath<E> {
     }
 }
 
-impl<E: Encoding> Display for OrdPath<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+impl<E: Encoding> fmt::Debug for OrdPath<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.into_iter()).finish()
+    }
+}
+
+impl<E: Encoding> fmt::Display for OrdPath<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         let mut iterator = self.into_iter();
         if let Some(value) = iterator.next() {
             write!(f, "{}", value)?;
@@ -515,22 +522,17 @@ mod tests {
 
     #[test]
     fn path_from_str() {
-        fn assert_path(s: &str, r: Option<Vec<i64>>) {
-            assert_eq!(
-                OrdPath::from_str(s, Default {})
-                    .map(|p| p.into_iter().collect::<Vec<_>>())
-                    .ok(),
-                r
-            );
+        fn assert_path(s: &str, p: Result<OrdPath, ParseError>) {
+            assert_eq!(OrdPath::from_str(s, Default {}), p);
         }
 
-        assert_path("", Some(vec![]));
-        assert_path("0", Some(vec![0]));
-        assert_path("1", Some(vec![1]));
-        assert_path("1.2", Some(vec![1, 2]));
-        assert_path("1.a", None);
-        assert_path("1_2", None);
-        assert_path("a", None);
+        assert_path("", Ok(ordpath![]));
+        assert_path("0", Ok(ordpath![0]));
+        assert_path("1", Ok(ordpath![1]));
+        assert_path("1.2", Ok(ordpath![1, 2]));
+        assert_path("1.a", Err(ParseError {}));
+        assert_path("1_2", Err(ParseError {}));
+        assert_path("a", Err(ParseError {}));
     }
 
     #[test]
