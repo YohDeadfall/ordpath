@@ -120,6 +120,46 @@ impl<E: Encoding> OrdPath<E> {
         path
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_ancestor(&self, other: &Self) -> bool {
+        let self_len = self.len();
+        let other_len = other.len();
+
+        if self_len > 0 && self_len <= other.len() {
+            unsafe {
+                let self_slice = std::slice::from_raw_parts(self.ptr(), self_len - 1);
+                let other_slice = std::slice::from_raw_parts(other.ptr(), self_len - 1);
+
+                if self_slice.eq(other_slice) {
+                    fn read_at<E: Encoding>(p: &OrdPath<E>, i: usize) -> u64 {
+                        unsafe {
+                            let value = p.ptr().add(i).read();
+                            if cfg!(target_endian = "little") {
+                                value.swap_bytes()
+                            } else {
+                                value
+                            }
+                        }
+                    }
+
+                    let self_last = read_at(self, self_len - 1);
+                    let self_tail = self_last.trailing_zeros() + 1;
+
+                    let other_last = read_at(other, self_len - 1);
+                    let other_tail = other_last.trailing_zeros() + 1;
+
+                    return self_tail > other_tail
+                        && (self_last >> self_tail) == (other_last >> self_tail);
+                }
+            }
+        }
+
+        self_len == 0 && other_len != 0
+    }
+
     fn spilled(&self) -> bool {
         self.len > 1
     }
@@ -579,6 +619,28 @@ mod tests {
         assert_eq!(cmp(&[0], &[0, 1]), Ordering::Less);
         assert_eq!(cmp(&[0], &[69976, 69976]), Ordering::Less);
         assert_eq!(cmp(&[0], &[4295037272, 4295037272]), Ordering::Less);
+    }
+
+    #[test]
+    fn path_is_empty() {
+        assert_eq!(ordpath![].is_empty(), true);
+        assert_eq!(ordpath![0].is_empty(), false);
+    }
+
+    #[test]
+    fn path_is_ancestor() {
+        assert!(ordpath![].is_ancestor(&ordpath![0]));
+        assert!(ordpath![0].is_ancestor(&ordpath![0, 1]));
+        assert!(ordpath![0, 1].is_ancestor(&ordpath![0, 1, 2, 3]));
+        assert!(ordpath![4295037272, 4295037272].is_ancestor(&ordpath![4295037272, 4295037272, 1]));
+
+        assert!(!ordpath![].is_ancestor(&ordpath![]));
+        assert!(!ordpath![0].is_ancestor(&ordpath![]));
+        assert!(!ordpath![0].is_ancestor(&ordpath![0]));
+        assert!(!ordpath![0].is_ancestor(&ordpath![1]));
+        assert!(!ordpath![0, 1].is_ancestor(&ordpath![0]));
+        assert!(!ordpath![0, 1, 2, 3].is_ancestor(&ordpath![0, 1]));
+        assert!(!ordpath![4295037272, 4295037272, 1].is_ancestor(&ordpath![4295037272, 4295037272]));
     }
 
     #[test]
