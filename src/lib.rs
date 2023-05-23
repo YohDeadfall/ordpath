@@ -124,7 +124,7 @@ impl<E: Encoding> OrdPath<E> {
         self.len() == 0
     }
 
-    pub fn is_ancestor(&self, other: &Self) -> bool {
+    pub fn is_ancestor_of(&self, other: &Self) -> bool {
         let self_len = self.len();
         let other_len = other.len();
 
