@@ -7,7 +7,9 @@ description = "Implementation of ORDPATH encoding"
 homepage = "https://github.com/yohdeadfall/ordpath/"
 repository = "https://github.com/yohdeadfall/ordpath/"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 keywords = ["encoding", "ordering", "hierarchy"]
 categories = ["encoding"]
+include = ["src/**/*.rs", "README.md", "LICENSE.Apache-2.0", "LICENSE.MIT"]
 
 [dependencies]
