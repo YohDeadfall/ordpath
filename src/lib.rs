@@ -1,3 +1,7 @@
+//! A hierarchy labeling scheme called ORDPATH.
+
+#![deny(missing_docs)]
+
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::fmt;
@@ -6,6 +10,7 @@ use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 use std::str::FromStr;
 
+/// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
 macro_rules! ordpath {
     ($($x:expr),*$(,)*) => {
@@ -13,6 +18,7 @@ macro_rules! ordpath {
     };
 }
 
+/// An error which can be returned when parsing an `OrdPath`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError;
 
@@ -22,6 +28,7 @@ impl From<ParseIntError> for ParseError {
     }
 }
 
+/// A compressed binary container of hierarchy labels represented by `i64` values.
 pub struct OrdPath<E: Encoding = Default> {
     enc: E,
     len: usize,
@@ -43,6 +50,7 @@ impl<E: Encoding> OrdPath<E> {
         OrdPath { enc, len: n, data }
     }
 
+    /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
     pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, ParseError> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
@@ -51,6 +59,7 @@ impl<E: Encoding> OrdPath<E> {
         Ok(Self::from_slice(&v, enc))
     }
 
+    /// Creates a new `OrdPath` containing elements of the slice with the specified encoding.
     pub fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
         let mut len = 0usize;
         let mut acc = 0usize;
@@ -120,10 +129,31 @@ impl<E: Encoding> OrdPath<E> {
         path
     }
 
+    /// Returns `true` if `self` has a length of zero bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate ordpath;
+    /// # use ordpath::{OrdPath, Default};
+    /// let p = ordpath![1, 2, 3];
+    /// assert!(!p.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns `true` if `self` is an ancestor of `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate ordpath;
+    /// # use ordpath::{OrdPath, Default};
+    /// let a = ordpath![1, 2];
+    /// let c = ordpath![1, 2, 3];
+    /// assert!(a.is_ancestor_of(&c));
+    /// ````
     pub fn is_ancestor_of(&self, other: &Self) -> bool {
         let self_len = self.len();
         let other_len = other.len();
@@ -292,6 +322,9 @@ union OrdPathData {
     heap: *const u64,
 }
 
+/// An iterator that references an `OrdPath` and yields its items by value.
+///
+/// Returned from [`OrdPath::into_iter`].
 pub struct IntoIter<'a, E: Encoding> {
     path: &'a OrdPath<E>,
     pos: usize,
@@ -357,6 +390,7 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
     }
 }
 
+/// An encoding stage used for vlue compression.
 pub struct Stage {
     prefix_len: u8,
     prefix: u8,
@@ -365,6 +399,7 @@ pub struct Stage {
 }
 
 impl Stage {
+    /// Constructs a stage with the given prefix and value range.
     pub const fn new(prefix_len: u8, prefix: u8, value_len: u8, value_low: i64) -> Stage {
         assert!(prefix_len < 8);
         assert!(value_len < 64);
@@ -377,33 +412,44 @@ impl Stage {
         }
     }
 
+    /// Returs the prefix identifying the stage.
     pub const fn prefix(&self) -> u8 {
         self.prefix
     }
 
+    /// Returns the number of bits used to encode the prefix.
     pub const fn prefix_len(&self) -> u8 {
         self.prefix_len
     }
 
+    /// Returns the lowest value which can be encoded by the stage.
     pub const fn value_low(&self) -> i64 {
         self.value_low
     }
 
+    /// Returns the upper value which can be encoded by the stage.
     pub const fn value_high(&self) -> i64 {
         self.value_low + ((1 << self.value_len) - 1)
     }
 
+    /// Returns the number of bits used to encode the value part.
     pub const fn value_len(&self) -> u8 {
         self.value_len
     }
 
+    /// Returns the total number of bits used to encode a value.
     pub const fn len(&self) -> u8 {
         self.prefix_len() + self.value_len()
     }
 }
 
+/// An implementation of `Alloctor` is responsible for providing a [`Stage`]
+/// for the provided value or prefix.
 pub trait Encoding {
+    /// Returns a reference to the [`Stage`] corresponding to the prefix.
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage>;
+
+    /// Returns a reference to the [`Stage`] which range contains the value.
     fn stage_by_value(&self, value: i64) -> Option<&Stage>;
 }
 
@@ -417,9 +463,11 @@ macro_rules! count {
     ($($e:expr,)*) => {<[()]>::len(&[$(replace_expr!($e; ())),*])};
 }
 
+/// Defines a new encoding with the specified stages.
 #[macro_export]
 macro_rules! encoding {
     ($v:vis $t:ident :[$(($prefix:expr, $prefix_len:expr, $value_len:expr)),+]) => {
+        #[allow(missing_docs)]
         #[derive(Copy, Clone, Default, Debug)]
         $v struct $t;
 
