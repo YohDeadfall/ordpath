@@ -629,18 +629,22 @@ mod tests {
 
     #[test]
     fn path_is_ancestor() {
-        assert!(ordpath![].is_ancestor(&ordpath![0]));
-        assert!(ordpath![0].is_ancestor(&ordpath![0, 1]));
-        assert!(ordpath![0, 1].is_ancestor(&ordpath![0, 1, 2, 3]));
-        assert!(ordpath![4295037272, 4295037272].is_ancestor(&ordpath![4295037272, 4295037272, 1]));
+        assert!(ordpath![].is_ancestor_of(&ordpath![0]));
+        assert!(ordpath![0].is_ancestor_of(&ordpath![0, 1]));
+        assert!(ordpath![0, 1].is_ancestor_of(&ordpath![0, 1, 2, 3]));
+        assert!(
+            ordpath![4295037272, 4295037272].is_ancestor_of(&ordpath![4295037272, 4295037272, 1])
+        );
 
-        assert!(!ordpath![].is_ancestor(&ordpath![]));
-        assert!(!ordpath![0].is_ancestor(&ordpath![]));
-        assert!(!ordpath![0].is_ancestor(&ordpath![0]));
-        assert!(!ordpath![0].is_ancestor(&ordpath![1]));
-        assert!(!ordpath![0, 1].is_ancestor(&ordpath![0]));
-        assert!(!ordpath![0, 1, 2, 3].is_ancestor(&ordpath![0, 1]));
-        assert!(!ordpath![4295037272, 4295037272, 1].is_ancestor(&ordpath![4295037272, 4295037272]));
+        assert!(!ordpath![].is_ancestor_of(&ordpath![]));
+        assert!(!ordpath![0].is_ancestor_of(&ordpath![]));
+        assert!(!ordpath![0].is_ancestor_of(&ordpath![0]));
+        assert!(!ordpath![0].is_ancestor_of(&ordpath![1]));
+        assert!(!ordpath![0, 1].is_ancestor_of(&ordpath![0]));
+        assert!(!ordpath![0, 1, 2, 3].is_ancestor_of(&ordpath![0, 1]));
+        assert!(
+            !ordpath![4295037272, 4295037272, 1].is_ancestor_of(&ordpath![4295037272, 4295037272])
+        );
     }
 
     #[test]
