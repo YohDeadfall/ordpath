@@ -5,7 +5,7 @@
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::fmt;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 use std::str::FromStr;
@@ -43,7 +43,9 @@ impl<E: Encoding> OrdPath<E> {
                     heap: std::alloc::alloc(Self::layout(n)) as *const u64,
                 }
             } else {
-                MaybeUninit::uninit().assume_init()
+                OrdPathData {
+                    inline: MaybeUninit::uninit().assume_init(),
+                }
             }
         };
 
@@ -207,7 +209,7 @@ impl<E: Encoding> OrdPath<E> {
             if self.spilled() {
                 self.data.heap
             } else {
-                self.data.inline.as_ptr()
+                mem::transmute(self.data.inline.as_ptr())
             }
         }
     }
@@ -318,7 +320,7 @@ impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
 }
 
 union OrdPathData {
-    inline: [u64; 1],
+    inline: [MaybeUninit<u64>; 1],
     heap: *const u64,
 }
 
