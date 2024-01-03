@@ -13,3 +13,7 @@ categories = ["encoding"]
 include = ["src/**/*.rs", "README.md", "LICENSE.Apache-2.0", "LICENSE.MIT"]
 
 [dependencies]
+serde = { version = "1", optional = true, default-features = false }
+
+[dev_dependencies]
+bincode = "1.3.3"

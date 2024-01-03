@@ -10,6 +10,12 @@ use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 use std::str::FromStr;
 
+#[cfg(feature = "serde")]
+use serde::{
+    de::{Deserialize, Deserializer, Visitor},
+    ser::{Serialize, Serializer},
+};
+
 /// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
 macro_rules! ordpath {
@@ -83,7 +89,7 @@ impl<E: Encoding> OrdPath<E> {
         }
 
         let path = OrdPath::with_capacity(len, enc);
-        let mut ptr = path.ptr() as *mut u64;
+        let mut ptr = path.as_ptr() as *mut u64;
         let mut acc = 0u64;
         let mut len = 0u8;
 
@@ -162,13 +168,13 @@ impl<E: Encoding> OrdPath<E> {
 
         if self_len > 0 && self_len <= other.len() {
             unsafe {
-                let self_slice = std::slice::from_raw_parts(self.ptr(), self_len - 1);
-                let other_slice = std::slice::from_raw_parts(other.ptr(), self_len - 1);
+                let self_slice = std::slice::from_raw_parts(self.as_ptr(), self_len - 1);
+                let other_slice = std::slice::from_raw_parts(other.as_ptr(), self_len - 1);
 
                 if self_slice.eq(other_slice) {
                     fn read_at<E: Encoding>(p: &OrdPath<E>, i: usize) -> u64 {
                         unsafe {
-                            let value = p.ptr().add(i).read();
+                            let value = p.as_ptr().add(i).read();
                             if cfg!(target_endian = "little") {
                                 value.swap_bytes()
                             } else {
@@ -204,7 +210,18 @@ impl<E: Encoding> OrdPath<E> {
         self.len
     }
 
-    fn ptr(&self) -> *const u64 {
+    fn as_ptr(&self) -> *const u64 {
+        unsafe {
+            if self.spilled() {
+                self.data.heap
+            } else {
+                mem::transmute(self.data.inline.as_ptr())
+            }
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    fn as_mut_ptr(&mut self) -> *const u64 {
         unsafe {
             if self.spilled() {
                 self.data.heap
@@ -215,15 +232,15 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     fn as_slice(&self) -> &[u64] {
-        unsafe { std::slice::from_raw_parts(self.ptr(), self.len()) }
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
     fn as_slice_and_last(&self) -> Option<(&[u64], u64)> {
         match self.len() {
             0 => None,
             l => unsafe {
-                let slice = std::slice::from_raw_parts(self.ptr(), l - 1);
-                let last = self.ptr().add(l - 1).read();
+                let slice = std::slice::from_raw_parts(self.as_ptr(), l - 1);
+                let last = self.as_ptr().add(l - 1).read();
 
                 Some((
                     slice,
@@ -250,7 +267,7 @@ impl<E: Encoding + Clone> Clone for OrdPath<E> {
     fn clone(&self) -> Self {
         let clone = Self::with_capacity(self.len(), self.encoding().clone());
         unsafe {
-            std::ptr::copy(self.ptr(), clone.ptr() as *mut u64, clone.len());
+            std::ptr::copy(self.as_ptr(), clone.as_ptr() as *mut u64, clone.len());
         }
         clone
     }
@@ -280,7 +297,7 @@ impl<E: Encoding> Drop for OrdPath<E> {
     fn drop(&mut self) {
         unsafe {
             if self.spilled() {
-                std::alloc::dealloc(self.ptr() as *mut u8, Self::layout(self.len));
+                std::alloc::dealloc(self.as_ptr() as *mut u8, Self::layout(self.len));
             }
         }
     }
@@ -316,6 +333,52 @@ impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
             acc: 0,
             len: 0,
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<E: Encoding> Serialize for OrdPath<E> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes = unsafe { std::slice::from_raw_parts(self.as_ptr() as *mut u8, self.len() * 8) };
+
+        bytes.serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<'de> Deserialize<'de> for OrdPath<Default> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(OrdPathVisitor {})
+    }
+}
+
+#[cfg(feature = "serde")]
+struct OrdPathVisitor;
+
+#[cfg(feature = "serde")]
+impl<'de> Visitor<'de> for OrdPathVisitor {
+    type Value = OrdPath<Default>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("bytes")
+    }
+
+    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> {
+        let mut path = OrdPath::with_capacity((v.len() + 7) / 8, Default {});
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(path.as_mut_ptr() as *mut u8, path.len() * 8) };
+
+        bytes.copy_from_slice(&v);
+
+        Ok(path)
     }
 }
 
@@ -356,7 +419,7 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
 
         if left > 0 {
             let acc_prev = self.acc;
-            let mut acc_next = unsafe { self.path.ptr().add(self.pos).read() };
+            let mut acc_next = unsafe { self.path.as_ptr().add(self.pos).read() };
 
             if cfg!(target_endian = "little") {
                 acc_next = acc_next.swap_bytes();
@@ -695,6 +758,17 @@ mod tests {
         assert!(
             !ordpath![4295037272, 4295037272, 1].is_ancestor_of(&ordpath![4295037272, 4295037272])
         );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn path_serialization() {
+        let path = ordpath![0, 1, 2, 3];
+
+        let encoded = bincode::serialize(&path).unwrap();
+        let decoded = bincode::deserialize(&encoded).unwrap();
+
+        assert_eq!(path, decoded);
     }
 
     #[test]
