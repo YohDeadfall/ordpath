@@ -44,9 +44,9 @@ pub struct OrdPath<E: Encoding = Default> {
 impl<E: Encoding> OrdPath<E> {
     fn with_capacity(n: usize, enc: E) -> OrdPath<E> {
         let data = unsafe {
-            if n > 1 {
+            if n > OrdPathData::INLINE_LEN {
                 OrdPathData {
-                    heap: std::alloc::alloc(Self::layout(n)) as *const u64,
+                    heap: std::alloc::alloc(Self::layout(n)),
                 }
             } else {
                 OrdPathData {
@@ -78,18 +78,18 @@ impl<E: Encoding> OrdPath<E> {
             const ACC_LIMIT: usize = usize::MAX - 8 - 64;
 
             if acc > ACC_LIMIT {
-                len += acc / u64::BITS as usize;
+                len += acc / u8::BITS as usize;
                 acc -= ACC_LIMIT;
             }
         }
 
         if acc > 0 || len > 0 {
             acc += 1;
-            len += (acc - 1) / u64::BITS as usize + 1;
+            len += (acc - 1) / u8::BITS as usize + 1;
         }
 
-        let path = OrdPath::with_capacity(len, enc);
-        let mut ptr = path.as_ptr() as *mut u64;
+        let mut path = OrdPath::with_capacity(len, enc);
+        let mut ptr = path.as_mut_ptr();
         let mut acc = 0u64;
         let mut len = 0u8;
 
@@ -110,8 +110,8 @@ impl<E: Encoding> OrdPath<E> {
 
             if len > 64 {
                 unsafe {
-                    ptr.write(acc.to_be());
-                    ptr = ptr.add(1);
+                    ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), 8);
+                    ptr = ptr.add(8);
                 }
 
                 len -= 64;
@@ -124,14 +124,15 @@ impl<E: Encoding> OrdPath<E> {
 
         if len < 64 {
             acc |= 1 << (63 - len);
+            len += 1;
         } else {
             unsafe {
-                ptr.add(1).write(1 << 63);
+                ptr.add(1).write(0x80);
             }
         }
 
         unsafe {
-            ptr.write(acc.to_be());
+            ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), len.div_ceil(8).into());
         }
 
         path
@@ -172,21 +173,10 @@ impl<E: Encoding> OrdPath<E> {
                 let other_slice = std::slice::from_raw_parts(other.as_ptr(), self_len - 1);
 
                 if self_slice.eq(other_slice) {
-                    fn read_at<E: Encoding>(p: &OrdPath<E>, i: usize) -> u64 {
-                        unsafe {
-                            let value = p.as_ptr().add(i).read();
-                            if cfg!(target_endian = "little") {
-                                value.swap_bytes()
-                            } else {
-                                value
-                            }
-                        }
-                    }
-
-                    let self_last = read_at(self, self_len - 1);
+                    let self_last = self.as_ptr().add(self_len - 1).read();
                     let self_tail = self_last.trailing_zeros() + 1;
 
-                    let other_last = read_at(other, self_len - 1);
+                    let other_last = other.as_ptr().add(self_len - 1).read();
                     let other_tail = other_last.trailing_zeros() + 1;
 
                     return self_tail > other_tail
@@ -199,7 +189,7 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     fn spilled(&self) -> bool {
-        self.len > 1
+        self.len > OrdPathData::INLINE_LEN
     }
 
     fn encoding(&self) -> &E {
@@ -210,7 +200,7 @@ impl<E: Encoding> OrdPath<E> {
         self.len
     }
 
-    fn as_ptr(&self) -> *const u64 {
+    fn as_ptr(&self) -> *const u8 {
         unsafe {
             if self.spilled() {
                 self.data.heap
@@ -220,22 +210,21 @@ impl<E: Encoding> OrdPath<E> {
         }
     }
 
-    #[cfg(feature = "serde")]
-    fn as_mut_ptr(&mut self) -> *const u64 {
+    fn as_mut_ptr(&mut self) -> *mut u8 {
         unsafe {
             if self.spilled() {
-                self.data.heap
+                self.data.heap as *mut u8
             } else {
                 mem::transmute(self.data.inline.as_ptr())
             }
         }
     }
 
-    fn as_slice(&self) -> &[u64] {
+    fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
-    fn as_slice_and_last(&self) -> Option<(&[u64], u64)> {
+    fn as_slice_and_last(&self) -> Option<(&[u8], u8)> {
         match self.len() {
             0 => None,
             l => unsafe {
@@ -244,14 +233,14 @@ impl<E: Encoding> OrdPath<E> {
 
                 Some((
                     slice,
-                    last & u64::MAX.wrapping_shl(last.trailing_zeros() + 1),
+                    last & u8::MAX.wrapping_shl(last.trailing_zeros() + 1),
                 ))
             },
         }
     }
 
     fn layout(n: usize) -> Layout {
-        unsafe { Layout::array::<u64>(n).unwrap_unchecked() }
+        unsafe { Layout::array::<u8>(n).unwrap_unchecked() }
     }
 }
 
@@ -265,9 +254,9 @@ impl FromStr for OrdPath<Default> {
 
 impl<E: Encoding + Clone> Clone for OrdPath<E> {
     fn clone(&self) -> Self {
-        let clone = Self::with_capacity(self.len(), self.encoding().clone());
+        let mut clone = Self::with_capacity(self.len(), self.encoding().clone());
         unsafe {
-            std::ptr::copy(self.as_ptr(), clone.as_ptr() as *mut u64, clone.len());
+            std::ptr::copy(self.as_ptr(), clone.as_mut_ptr(), clone.len());
         }
         clone
     }
@@ -343,9 +332,7 @@ impl<E: Encoding> Serialize for OrdPath<E> {
     where
         S: Serializer,
     {
-        let bytes = unsafe { std::slice::from_raw_parts(self.as_ptr() as *mut u8, self.len() * 8) };
-
-        bytes.serialize(serializer)
+        self.as_slice().serialize(serializer)
     }
 }
 
@@ -372,9 +359,9 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> {
-        let mut path = OrdPath::with_capacity((v.len() + 7) / 8, Default {});
+        let mut path = OrdPath::with_capacity(v.len(), Default {});
         let bytes =
-            unsafe { std::slice::from_raw_parts_mut(path.as_mut_ptr() as *mut u8, path.len() * 8) };
+            unsafe { std::slice::from_raw_parts_mut(path.as_mut_ptr() as *mut u8, path.len()) };
 
         bytes.copy_from_slice(&v);
 
@@ -383,8 +370,12 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 }
 
 union OrdPathData {
-    inline: [MaybeUninit<u64>; 1],
-    heap: *const u64,
+    inline: [MaybeUninit<u8>; Self::INLINE_LEN],
+    heap: *const u8,
+}
+
+impl OrdPathData {
+    const INLINE_LEN: usize = (usize::BITS / u8::BITS) as usize;
 }
 
 /// An iterator that references an `OrdPath` and yields its items by value.
@@ -418,18 +409,23 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
         let left = self.path.len() - self.pos;
 
         if left > 0 {
-            let acc_prev = self.acc;
-            let mut acc_next = unsafe { self.path.as_ptr().add(self.pos).read() };
+            let consumed = left.min(8);
+            let acc_next = unsafe {
+                let mut buffer = 0u64;
+                self.path
+                    .as_ptr()
+                    .add(self.pos)
+                    .copy_to_nonoverlapping(&mut buffer as *mut u64 as *mut u8, consumed);
 
-            if cfg!(target_endian = "little") {
-                acc_next = acc_next.swap_bytes();
-            }
+                u64::from_be(buffer)
+            };
 
-            let acc = acc_prev | acc_next >> self.len;
+            let acc = self.acc | acc_next >> self.len;
             let len = self.len
-                + match left {
-                    1 => 64 - acc_next.trailing_zeros() - 1,
-                    _ => 64,
+                + if consumed < 8 {
+                    64 - acc_next.trailing_zeros() - 1
+                } else {
+                    64
                 } as u8;
 
             let prefix = (acc >> 56) as u8;
@@ -439,7 +435,7 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
                 .stage_by_prefix(prefix)
                 .expect("unknown_prefix");
 
-            self.pos += 1;
+            self.pos += consumed;
 
             if stage.len() <= len {
                 let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
