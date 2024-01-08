@@ -17,3 +17,8 @@ serde = { version = "1", optional = true, default-features = false }
 
 [dev_dependencies]
 bincode = "1.3.3"
+criterion = "0.5.1"
+
+[[bench]]
+name = "ordpath"
+harness = false
