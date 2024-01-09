@@ -42,6 +42,10 @@ pub struct OrdPath<E: Encoding = Default> {
 }
 
 impl<E: Encoding> OrdPath<E> {
+    const END_BITS: u32 = 3;
+    const LEN_BITS: u32 = usize::BITS - Self::END_BITS;
+    const LEN_MASK: usize = usize::MAX >> Self::END_BITS;
+
     fn with_capacity(n: usize, enc: E) -> OrdPath<E> {
         let data = unsafe {
             if n > OrdPathData::INLINE_LEN {
@@ -84,8 +88,11 @@ impl<E: Encoding> OrdPath<E> {
         }
 
         if acc > 0 || len > 0 {
-            acc += 1;
             len += (acc - 1) / u8::BITS as usize + 1;
+        }
+
+        if len > usize::MAX.shr(3) {
+            panic!("the path is too long")
         }
 
         let mut path = OrdPath::with_capacity(len, enc);
@@ -122,19 +129,13 @@ impl<E: Encoding> OrdPath<E> {
             }
         }
 
-        if len < 64 {
-            acc |= 1 << (63 - len);
-            len += 1;
-        } else {
-            unsafe {
-                ptr.add(1).write(0x80);
-            }
-        }
-
         unsafe {
             ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), len.div_ceil(8).into());
         }
 
+        path.len |= (u64::BITS as usize - len as usize)
+            .wrapping_rem(u8::BITS as usize)
+            .shl(Self::LEN_BITS);
         path
     }
 
@@ -167,20 +168,20 @@ impl<E: Encoding> OrdPath<E> {
         let self_len = self.len();
         let other_len = other.len();
 
-        if self_len > 0 && self_len <= other.len() {
+        if self_len > 0 && self_len <= other_len {
             unsafe {
                 let self_slice = std::slice::from_raw_parts(self.as_ptr(), self_len - 1);
                 let other_slice = std::slice::from_raw_parts(other.as_ptr(), self_len - 1);
 
                 if self_slice.eq(other_slice) {
-                    let self_last = self.as_ptr().add(self_len - 1).read();
-                    let self_tail = self_last.trailing_zeros() + 1;
+                    let zeros = self.trailing_zeros();
 
-                    let other_last = other.as_ptr().add(self_len - 1).read();
-                    let other_tail = other_last.trailing_zeros() + 1;
+                    if self_len < other_len || zeros > other.trailing_zeros() {
+                        let self_last = self.as_ptr().add(self_len - 1).read();
+                        let other_last = other.as_ptr().add(self_len - 1).read();
 
-                    return self_tail > other_tail
-                        && (self_last >> self_tail) == (other_last >> self_tail);
+                        return self_last == other_last & u8::MAX.shl(zeros);
+                    }
                 }
             }
         }
@@ -189,7 +190,7 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     fn spilled(&self) -> bool {
-        self.len > OrdPathData::INLINE_LEN
+        self.len() > OrdPathData::INLINE_LEN
     }
 
     fn encoding(&self) -> &E {
@@ -197,7 +198,11 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.len & Self::LEN_MASK
+    }
+
+    fn trailing_zeros(&self) -> u32 {
+        self.len.shr(Self::LEN_BITS) as u32
     }
 
     fn as_ptr(&self) -> *const u8 {
@@ -224,21 +229,6 @@ impl<E: Encoding> OrdPath<E> {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
-    fn as_slice_and_last(&self) -> Option<(&[u8], u8)> {
-        match self.len() {
-            0 => None,
-            l => unsafe {
-                let slice = std::slice::from_raw_parts(self.as_ptr(), l - 1);
-                let last = self.as_ptr().add(l - 1).read();
-
-                Some((
-                    slice,
-                    last & u8::MAX.wrapping_shl(last.trailing_zeros() + 1),
-                ))
-            },
-        }
-    }
-
     fn layout(n: usize) -> Layout {
         unsafe { Layout::array::<u8>(n).unwrap_unchecked() }
     }
@@ -258,6 +248,7 @@ impl<E: Encoding + Clone> Clone for OrdPath<E> {
         unsafe {
             std::ptr::copy(self.as_ptr(), clone.as_mut_ptr(), clone.len());
         }
+        clone.len = self.len;
         clone
     }
 }
@@ -278,7 +269,7 @@ impl<E: Encoding> PartialOrd for OrdPath<E> {
 
 impl<E: Encoding> Ord for OrdPath<E> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.as_slice_and_last().cmp(&other.as_slice_and_last())
+        self.as_slice().cmp(&other.as_slice())
     }
 }
 
@@ -286,7 +277,7 @@ impl<E: Encoding> Drop for OrdPath<E> {
     fn drop(&mut self) {
         unsafe {
             if self.spilled() {
-                std::alloc::dealloc(self.as_ptr() as *mut u8, Self::layout(self.len));
+                std::alloc::dealloc(self.as_ptr() as *mut u8, Self::layout(self.len()));
             }
         }
     }
@@ -365,6 +356,11 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 
         bytes.copy_from_slice(&v);
 
+        let mut iter = path.into_iter();
+        while iter.next().is_some() {}
+
+        path.len |= (iter.len as usize).shl(OrdPath::<Default>::LEN_BITS);
+
         Ok(path)
     }
 }
@@ -421,12 +417,7 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
             };
 
             let acc = self.acc | acc_next >> self.len;
-            let len = self.len
-                + if consumed < 8 {
-                    64 - acc_next.trailing_zeros() - 1
-                } else {
-                    64
-                } as u8;
+            let len = self.len + (consumed as u32 * u8::BITS) as u8;
 
             let prefix = (acc >> 56) as u8;
             let stage = self
@@ -765,6 +756,7 @@ mod tests {
         let decoded = bincode::deserialize(&encoded).unwrap();
 
         assert_eq!(path, decoded);
+        assert_eq!(path.trailing_zeros(), decoded.trailing_zeros());
     }
 
     #[test]
