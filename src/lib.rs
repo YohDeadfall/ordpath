@@ -193,11 +193,13 @@ impl<E: Encoding> OrdPath<E> {
         self.len() > OrdPathData::INLINE_LEN
     }
 
-    fn encoding(&self) -> &E {
+    /// Returns a reference to the used encoding.
+    pub fn encoding(&self) -> &E {
         &self.enc
     }
 
-    fn len(&self) -> usize {
+    /// Returns the number of bytes used.
+    pub fn len(&self) -> usize {
         self.len & Self::LEN_MASK
     }
 
@@ -225,7 +227,8 @@ impl<E: Encoding> OrdPath<E> {
         }
     }
 
-    fn as_slice(&self) -> &[u8] {
+    /// Extracts a slice containing the encoded values.
+    pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
