@@ -5,9 +5,10 @@
 use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::fmt;
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
+use std::ptr::{addr_of, addr_of_mut};
 use std::str::FromStr;
 
 #[cfg(feature = "serde")]
@@ -212,7 +213,7 @@ impl<E: Encoding> OrdPath<E> {
             if self.spilled() {
                 self.data.heap
             } else {
-                mem::transmute(self.data.inline.as_ptr())
+                addr_of!(self.data.inline) as *const u8
             }
         }
     }
@@ -222,7 +223,7 @@ impl<E: Encoding> OrdPath<E> {
             if self.spilled() {
                 self.data.heap as *mut u8
             } else {
-                mem::transmute(self.data.inline.as_ptr())
+                addr_of_mut!(self.data.inline) as *mut u8
             }
         }
     }
