@@ -115,7 +115,7 @@ impl<E: Encoding> OrdPath<E> {
             acc |= buf >> len;
             len += stage.len();
 
-            if len > 64 {
+            if len >= 64 {
                 unsafe {
                     ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), 8);
                     ptr = ptr.add(8);
