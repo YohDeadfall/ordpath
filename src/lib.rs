@@ -164,7 +164,7 @@ impl<E: Encoding> OrdPath<E> {
     /// let a = ordpath![1, 2];
     /// let c = ordpath![1, 2, 3];
     /// assert!(a.is_ancestor_of(&c));
-    /// ````
+    /// ```
     pub fn is_ancestor_of(&self, other: &Self) -> bool {
         let self_len = self.len();
         let other_len = other.len();
@@ -233,8 +233,68 @@ impl<E: Encoding> OrdPath<E> {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
+    }
+
     fn layout(n: usize) -> Layout {
         unsafe { Layout::array::<u8>(n).unwrap_unchecked() }
+    }
+}
+
+impl<E: Encoding + Clone> OrdPath<E> {
+    /// Returns the `OrdPath<E>` without its final element, if there is one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate ordpath;
+    /// # use ordpath::{OrdPath, Default};
+    /// let path = ordpath![1, 2];
+    /// let parent = path.parent();
+    /// assert_eq!(parent, Some(ordpath![1]));
+    /// let grand_parent = parent.and_then(|p| p.parent());
+    /// assert_eq!(grand_parent, Some(ordpath![]));
+    /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
+    /// assert_eq!(grand_grand_parent, None);
+    /// ```
+    pub fn parent(&self) -> Option<Self> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut iter = self.into_iter();
+        let mut consumed_bytes = 0;
+        let mut consumed_bits = 0;
+        if iter.next().is_some() {
+            loop {
+                let tmp_bytes = iter.pos;
+                let tmp_bits = iter.len;
+
+                if iter.next().is_none() {
+                    break;
+                }
+
+                consumed_bytes = tmp_bytes;
+                consumed_bits = tmp_bits;
+            }
+        }
+
+        let len = consumed_bytes - consumed_bits.div_euclid(8) as usize;
+        let trailing_zeros = consumed_bits.rem_euclid(8);
+
+        let mut path = Self::with_capacity(len, self.encoding().clone());
+        let data = path.as_mut_slice();
+
+        data.copy_from_slice(&self.as_slice()[..len]);
+
+        if let Some(last) = data.last_mut() {
+            *last &= u8::MAX.shl(trailing_zeros);
+        }
+
+        path.len |= (trailing_zeros as usize).shl(Self::LEN_BITS);
+
+        Some(path)
     }
 }
 
@@ -749,6 +809,17 @@ mod tests {
         assert!(
             !ordpath![4295037272, 4295037272, 1].is_ancestor_of(&ordpath![4295037272, 4295037272])
         );
+    }
+
+    #[test]
+    fn path_parent() {
+        let path = ordpath![1, 2];
+        let parent = path.parent();
+        assert_eq!(parent, Some(ordpath![1]));
+        let grand_parent = parent.and_then(|p| p.parent());
+        assert_eq!(grand_parent, Some(ordpath![]));
+        let grand_grand_parent = grand_parent.and_then(|p| p.parent());
+        assert_eq!(grand_grand_parent, None);
     }
 
     #[cfg(feature = "serde")]
