@@ -56,12 +56,28 @@ fn ordpath_is_ancestor_of(c: &mut Criterion) {
     }
 }
 
+fn ordpath_iteration(c: &mut Criterion) {
+    for len in &[0, 10, 50, 100, 500, 1000] {
+        let s = (0..*len).collect::<Vec<_>>();
+        let p = OrdPath::from_slice(&s, Default);
+
+        c.bench_function(&format!("ordpath_iteration{}", len), |b| {
+            b.iter(|| {
+                for x in &p {
+                    black_box(x);
+                }
+            })
+        });
+    }
+}
+
 criterion_group!(
     benches,
     ordpath_comparison,
     ordpath_from_slice,
     ordpath_from_str,
-    ordpath_is_ancestor_of
+    ordpath_is_ancestor_of,
+    ordpath_iteration
 );
 
 criterion_main!(benches);
