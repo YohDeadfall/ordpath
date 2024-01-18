@@ -1,11 +1,11 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ordpath::{Default, OrdPath};
+use ordpath::{enc, OrdPath};
 
 fn ordpath_comparison(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = OrdPath::from_slice(&seq, Default {});
-        let y = OrdPath::from_slice(&seq, Default {});
+        let x = OrdPath::from_slice(&seq, enc::Default);
+        let y = OrdPath::from_slice(&seq, enc::Default);
 
         c.bench_function(&format!("ordpath_comparison_{}", len), |b| {
             b.iter(|| {
@@ -21,7 +21,7 @@ fn ordpath_from_slice(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_slice_{}", len), |b| {
             b.iter(|| {
-                black_box(OrdPath::from_slice(&s, Default {}));
+                black_box(OrdPath::from_slice(&s, enc::Default));
             })
         });
     }
@@ -36,7 +36,7 @@ fn ordpath_from_str(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_str_{}", len), |b| {
             b.iter(|| {
-                black_box(OrdPath::from_str(&s, Default {}).unwrap());
+                black_box(OrdPath::from_str(&s, enc::Default).unwrap());
             })
         });
     }
@@ -45,8 +45,8 @@ fn ordpath_from_str(c: &mut Criterion) {
 fn ordpath_is_ancestor_of(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = OrdPath::from_slice(&seq, Default {});
-        let y = OrdPath::from_slice(&seq, Default {});
+        let x = OrdPath::from_slice(&seq, enc::Default);
+        let y = OrdPath::from_slice(&seq, enc::Default);
 
         c.bench_function(&format!("ordpath_is_ancestor_of_{}", len), |b| {
             b.iter(|| {
@@ -59,7 +59,7 @@ fn ordpath_is_ancestor_of(c: &mut Criterion) {
 fn ordpath_iteration(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len).collect::<Vec<_>>();
-        let p = OrdPath::from_slice(&s, Default);
+        let p = OrdPath::from_slice(&s, enc::Default);
 
         c.bench_function(&format!("ordpath_iteration{}", len), |b| {
             b.iter(|| {
