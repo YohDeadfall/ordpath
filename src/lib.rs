@@ -6,7 +6,6 @@ use std::alloc::Layout;
 use std::cmp::Ordering;
 use std::fmt;
 use std::mem::MaybeUninit;
-use std::num::ParseIntError;
 use std::ops::{Shl, Shr};
 use std::ptr::{addr_of, addr_of_mut};
 use std::str::FromStr;
@@ -18,7 +17,10 @@ use serde::{
 };
 
 use enc::Encoding;
+pub use error::{Error, ErrorKind};
+
 pub mod enc;
+mod error;
 
 /// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
@@ -26,16 +28,6 @@ macro_rules! ordpath {
     ($($x:expr),*$(,)*) => {
         OrdPath::from_slice(&vec![$($x),*], $crate::enc::Default)
     };
-}
-
-/// An error which can be returned when parsing an `OrdPath`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError;
-
-impl From<ParseIntError> for ParseError {
-    fn from(_: ParseIntError) -> Self {
-        ParseError {}
-    }
 }
 
 /// A compressed binary container of hierarchy labels represented by `i64` values.
@@ -67,7 +59,7 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
-    pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, ParseError> {
+    pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, Error> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
             v.push(i64::from_str_radix(x, 10)?);
@@ -302,7 +294,7 @@ impl<E: Encoding + Clone> OrdPath<E> {
 }
 
 impl FromStr for OrdPath<enc::Default> {
-    type Err = ParseError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_str(s, enc::Default)
@@ -603,7 +595,7 @@ mod tests {
 
     #[test]
     fn path_from_str() {
-        fn assert_path(s: &str, p: Result<OrdPath, ParseError>) {
+        fn assert_path(s: &str, p: Result<OrdPath, Error>) {
             assert_eq!(OrdPath::from_str(s, enc::Default), p);
         }
 
@@ -611,9 +603,9 @@ mod tests {
         assert_path("0", Ok(ordpath![0]));
         assert_path("1", Ok(ordpath![1]));
         assert_path("1.2", Ok(ordpath![1, 2]));
-        assert_path("1.a", Err(ParseError {}));
-        assert_path("1_2", Err(ParseError {}));
-        assert_path("a", Err(ParseError {}));
+        assert_path("1.a", Err(Error::new(ErrorKind::InvalidInput)));
+        assert_path("1_2", Err(Error::new(ErrorKind::InvalidInput)));
+        assert_path("a", Err(Error::new(ErrorKind::InvalidInput)));
     }
 
     #[test]
