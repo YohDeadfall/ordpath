@@ -26,7 +26,7 @@ mod error;
 #[macro_export]
 macro_rules! ordpath {
     ($($x:expr),*$(,)*) => {
-        OrdPath::from_slice(&vec![$($x),*], $crate::enc::Default)
+        OrdPath::from_slice(&vec![$($x),*], $crate::enc::Default).unwrap()
     };
 }
 
@@ -64,11 +64,11 @@ impl<E: Encoding> OrdPath<E> {
         for x in s.split_terminator('.') {
             v.push(i64::from_str_radix(x, 10)?);
         }
-        Ok(Self::from_slice(&v, enc))
+        Self::from_slice(&v, enc)
     }
 
     /// Creates a new `OrdPath` containing elements of the slice with the specified encoding.
-    pub fn from_slice(s: &[i64], enc: E) -> OrdPath<E> {
+    pub fn from_slice(s: &[i64], enc: E) -> Result<OrdPath<E>, Error> {
         let mut len = 0usize;
         let mut acc = 0usize;
 
@@ -88,7 +88,7 @@ impl<E: Encoding> OrdPath<E> {
         }
 
         if len > usize::MAX.shr(3) {
-            panic!("the path is too long")
+            return Err(Error::new(ErrorKind::CapacityOverflow));
         }
 
         let mut path = OrdPath::with_capacity(len, enc);
@@ -98,8 +98,10 @@ impl<E: Encoding> OrdPath<E> {
 
         for value in s {
             let value = *value;
-            let stage = path.encoding().stage_by_value(value).unwrap();
-
+            let stage = path
+                .encoding()
+                .stage_by_value(value)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
             let prefix = stage.prefix() as u64;
             let value = (value - stage.value_low()) as u64;
 
@@ -132,7 +134,8 @@ impl<E: Encoding> OrdPath<E> {
         path.len |= (u64::BITS as usize - len as usize)
             .wrapping_rem(u8::BITS as usize)
             .shl(Self::LEN_BITS);
-        path
+
+        Ok(path)
     }
 
     /// Returns `true` if `self` has a length of zero bytes.
@@ -563,6 +566,7 @@ mod tests {
         fn assert_path(s: &[i64]) {
             assert_eq!(
                 OrdPath::from_slice(s, enc::Default)
+                    .unwrap()
                     .into_iter()
                     .collect::<Vec<_>>(),
                 s
@@ -611,7 +615,10 @@ mod tests {
     #[test]
     fn path_to_string() {
         fn assert_path(p: Vec<i64>, s: &str) {
-            assert_eq!(OrdPath::from_slice(&p, enc::Default).to_string(), s);
+            assert_eq!(
+                OrdPath::from_slice(&p, enc::Default).unwrap().to_string(),
+                s
+            );
         }
 
         assert_path(vec![], "");
@@ -638,8 +645,8 @@ mod tests {
     #[test]
     fn path_ordering() {
         fn cmp(left: &[i64], right: &[i64]) -> Ordering {
-            let left = OrdPath::from_slice(left, enc::Default);
-            let right = OrdPath::from_slice(right, enc::Default);
+            let left = OrdPath::from_slice(left, enc::Default).unwrap();
+            let right = OrdPath::from_slice(right, enc::Default).unwrap();
 
             left.cmp(&right)
         }
