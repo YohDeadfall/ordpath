@@ -3,14 +3,14 @@ name = "ordpath"
 version = "0.2.0"
 authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
 edition = "2021"
-description = "Implementation of ORDPATH encoding"
 homepage = "https://github.com/yohdeadfall/ordpath/"
 repository = "https://github.com/yohdeadfall/ordpath/"
+description = "Implementation of ORDPATH encoding"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["encoding", "ordering", "hierarchy"]
 categories = ["encoding"]
-include = ["src/**/*.rs", "README.md", "LICENSE.Apache-2.0", "LICENSE.MIT"]
+exclude = [".github/"]
 
 [dependencies]
 serde = { version = "1", optional = true, default-features = false }
