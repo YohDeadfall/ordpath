@@ -504,59 +504,6 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
     }
 }
 
-/// An encoding stage used for vlue compression.
-pub struct Stage {
-    prefix_len: u8,
-    prefix: u8,
-    value_len: u8,
-    value_low: i64,
-}
-
-impl Stage {
-    /// Constructs a stage with the given prefix and value range.
-    pub const fn new(prefix_len: u8, prefix: u8, value_len: u8, value_low: i64) -> Stage {
-        assert!(prefix_len < 8);
-        assert!(value_len < 64);
-
-        Stage {
-            prefix_len,
-            prefix,
-            value_len,
-            value_low,
-        }
-    }
-
-    /// Returs the prefix identifying the stage.
-    pub const fn prefix(&self) -> u8 {
-        self.prefix
-    }
-
-    /// Returns the number of bits used to encode the prefix.
-    pub const fn prefix_len(&self) -> u8 {
-        self.prefix_len
-    }
-
-    /// Returns the lowest value which can be encoded by the stage.
-    pub const fn value_low(&self) -> i64 {
-        self.value_low
-    }
-
-    /// Returns the upper value which can be encoded by the stage.
-    pub const fn value_high(&self) -> i64 {
-        self.value_low + ((1 << self.value_len) - 1)
-    }
-
-    /// Returns the number of bits used to encode the value part.
-    pub const fn value_len(&self) -> u8 {
-        self.value_len
-    }
-
-    /// Returns the total number of bits used to encode a value.
-    pub const fn len(&self) -> u8 {
-        self.prefix_len() + self.value_len()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
