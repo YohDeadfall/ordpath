@@ -1,6 +1,6 @@
 [package]
 name = "ordpath"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
 edition = "2021"
 description = "Implementation of ORDPATH encoding"
