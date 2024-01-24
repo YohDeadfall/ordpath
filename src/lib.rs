@@ -296,6 +296,9 @@ impl<E: Encoding + Clone> OrdPath<E> {
     }
 }
 
+unsafe impl<E: Encoding + Send> Send for OrdPath<E> {}
+unsafe impl<E: Encoding + Sync> Sync for OrdPath<E> {}
+
 impl FromStr for OrdPath<enc::Default> {
     type Err = Error;
 
