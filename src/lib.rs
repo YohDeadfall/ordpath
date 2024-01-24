@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::{Shl, Shr};
-use std::ptr::{addr_of, addr_of_mut};
+use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::str::FromStr;
 
 #[cfg(feature = "serde")]
@@ -46,7 +46,7 @@ impl<E: Encoding> OrdPath<E> {
         let data = unsafe {
             if n > OrdPathData::INLINE_LEN {
                 OrdPathData {
-                    heap: std::alloc::alloc(Self::layout(n)),
+                    heap: NonNull::new_unchecked(std::alloc::alloc(Self::layout(n))),
                 }
             } else {
                 OrdPathData {
@@ -209,7 +209,7 @@ impl<E: Encoding> OrdPath<E> {
     fn as_ptr(&self) -> *const u8 {
         unsafe {
             if self.spilled() {
-                self.data.heap
+                self.data.heap.as_ptr()
             } else {
                 addr_of!(self.data.inline) as *const u8
             }
@@ -219,7 +219,7 @@ impl<E: Encoding> OrdPath<E> {
     fn as_mut_ptr(&mut self) -> *mut u8 {
         unsafe {
             if self.spilled() {
-                self.data.heap as *mut u8
+                self.data.heap.as_ptr()
             } else {
                 addr_of_mut!(self.data.inline) as *mut u8
             }
@@ -429,7 +429,7 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 
 union OrdPathData {
     inline: [MaybeUninit<u8>; Self::INLINE_LEN],
-    heap: *const u8,
+    heap: NonNull<u8>,
 }
 
 impl OrdPathData {
