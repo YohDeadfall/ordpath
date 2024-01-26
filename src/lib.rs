@@ -2,13 +2,11 @@
 
 #![deny(missing_docs)]
 
-use std::alloc::Layout;
-use std::cmp::Ordering;
 use std::fmt;
-use std::mem::MaybeUninit;
-use std::ops::{Shl, Shr};
-use std::ptr::{addr_of, addr_of_mut, NonNull};
+use std::mem::ManuallyDrop;
+use std::ops::Shl;
 use std::str::FromStr;
+use std::{cmp::Ordering, ops::Shr};
 
 #[cfg(feature = "serde")]
 use serde::{
@@ -18,9 +16,11 @@ use serde::{
 
 use enc::Encoding;
 pub use error::{Error, ErrorKind};
+use raw::RawOrdPath;
 
 pub mod enc;
 mod error;
+mod raw;
 
 /// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
@@ -33,31 +33,10 @@ macro_rules! ordpath {
 /// A compressed binary container of hierarchy labels represented by `i64` values.
 pub struct OrdPath<E: Encoding = enc::Default> {
     enc: E,
-    len: usize,
-    data: OrdPathData,
+    raw: RawOrdPath<4>,
 }
 
 impl<E: Encoding> OrdPath<E> {
-    const END_BITS: u32 = 3;
-    const LEN_BITS: u32 = usize::BITS - Self::END_BITS;
-    const LEN_MASK: usize = usize::MAX >> Self::END_BITS;
-
-    fn with_capacity(n: usize, enc: E) -> OrdPath<E> {
-        let data = unsafe {
-            if n > OrdPathData::INLINE_LEN {
-                OrdPathData {
-                    heap: NonNull::new_unchecked(std::alloc::alloc(Self::layout(n))),
-                }
-            } else {
-                OrdPathData {
-                    inline: MaybeUninit::uninit().assume_init(),
-                }
-            }
-        };
-
-        OrdPath { enc, len: n, data }
-    }
-
     /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
     pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, Error> {
         let mut v = Vec::new();
@@ -75,31 +54,35 @@ impl<E: Encoding> OrdPath<E> {
         for value in s {
             acc += enc.stage_by_value(*value).unwrap().len() as usize;
 
-            const ACC_LIMIT: usize = usize::MAX - 8 - 64;
+            const VALUE_LEN: usize = u64::BITS as usize;
+            const PREFIX_LEN: usize = u8::BITS as usize;
+            const ACC_LIMIT: usize = usize::MAX - PREFIX_LEN - VALUE_LEN;
 
             if acc > ACC_LIMIT {
-                len += acc / u8::BITS as usize;
+                len += acc / 8;
                 acc -= ACC_LIMIT;
             }
         }
 
         if acc > 0 || len > 0 {
-            len += (acc - 1) / u8::BITS as usize + 1;
+            len += acc.div_ceil(8);
         }
 
         if len > usize::MAX.shr(3) {
             return Err(Error::new(ErrorKind::CapacityOverflow));
         }
 
-        let mut path = OrdPath::with_capacity(len, enc);
-        let mut ptr = path.as_mut_ptr();
+        let tail_bits = acc.wrapping_rem(8) as u8;
+        let trailing_bits = (8 - tail_bits).wrapping_rem(8);
+
+        let raw = RawOrdPath::new(len, trailing_bits);
+        let mut ptr = raw.as_ptr() as *mut u8;
         let mut acc = 0u64;
         let mut len = 0u8;
 
         for value in s {
             let value = *value;
-            let stage = path
-                .encoding()
+            let stage = enc
                 .stage_by_value(value)
                 .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
             let prefix = stage.prefix() as u64;
@@ -131,11 +114,7 @@ impl<E: Encoding> OrdPath<E> {
             ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), len.div_ceil(8).into());
         }
 
-        path.len |= (u64::BITS as usize - len as usize)
-            .wrapping_rem(u8::BITS as usize)
-            .shl(Self::LEN_BITS);
-
-        Ok(path)
+        Ok(OrdPath { enc, raw })
     }
 
     /// Returns `true` if `self` has a length of zero bytes.
@@ -173,9 +152,9 @@ impl<E: Encoding> OrdPath<E> {
                 let other_slice = std::slice::from_raw_parts(other.as_ptr(), self_len - 1);
 
                 if self_slice.eq(other_slice) {
-                    let zeros = self.trailing_zeros();
+                    let zeros = self.raw.trailing_bits();
 
-                    if self_len < other_len || zeros > other.trailing_zeros() {
+                    if self_len < other_len || zeros > other.raw.trailing_bits() {
                         let self_last = self.as_ptr().add(self_len - 1).read();
                         let other_last = other.as_ptr().add(self_len - 1).read();
 
@@ -188,10 +167,6 @@ impl<E: Encoding> OrdPath<E> {
         self_len == 0 && other_len != 0
     }
 
-    fn spilled(&self) -> bool {
-        self.len() > OrdPathData::INLINE_LEN
-    }
-
     /// Returns a reference to the used encoding.
     pub fn encoding(&self) -> &E {
         &self.enc
@@ -199,44 +174,16 @@ impl<E: Encoding> OrdPath<E> {
 
     /// Returns the number of bytes used.
     pub fn len(&self) -> usize {
-        self.len & Self::LEN_MASK
-    }
-
-    fn trailing_zeros(&self) -> u32 {
-        self.len.shr(Self::LEN_BITS) as u32
+        self.raw.len()
     }
 
     fn as_ptr(&self) -> *const u8 {
-        unsafe {
-            if self.spilled() {
-                self.data.heap.as_ptr()
-            } else {
-                addr_of!(self.data.inline) as *const u8
-            }
-        }
-    }
-
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        unsafe {
-            if self.spilled() {
-                self.data.heap.as_ptr()
-            } else {
-                addr_of_mut!(self.data.inline) as *mut u8
-            }
-        }
+        self.raw.as_ptr()
     }
 
     /// Extracts a slice containing the encoded values.
     pub fn as_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
-    }
-
-    fn layout(n: usize) -> Layout {
-        unsafe { Layout::array::<u8>(n).unwrap_unchecked() }
     }
 }
 
@@ -279,20 +226,23 @@ impl<E: Encoding + Clone> OrdPath<E> {
         }
 
         let len = consumed_bytes - consumed_bits.div_euclid(8) as usize;
-        let trailing_zeros = consumed_bits.rem_euclid(8);
+        let trailing_bits = consumed_bits.wrapping_rem(8);
 
-        let mut path = Self::with_capacity(len, self.encoding().clone());
-        let data = path.as_mut_slice();
+        let raw = RawOrdPath::<4>::new(len, trailing_bits);
+        if len > 0 {
+            unsafe {
+                let ptr = raw.as_ptr() as *mut u8;
+                ptr.copy_from_nonoverlapping(self.raw.as_ptr(), len);
 
-        data.copy_from_slice(&self.as_slice()[..len]);
-
-        if let Some(last) = data.last_mut() {
-            *last &= u8::MAX.shl(trailing_zeros);
+                let ptr = ptr.add(len - 1);
+                ptr.write(ptr.read() & u8::MAX.shl(trailing_bits));
+            }
         }
 
-        path.len |= (trailing_zeros as usize).shl(Self::LEN_BITS);
-
-        Some(path)
+        Some(Self {
+            enc: self.enc.clone(),
+            raw,
+        })
     }
 }
 
@@ -309,12 +259,10 @@ impl FromStr for OrdPath<enc::Default> {
 
 impl<E: Encoding + Clone> Clone for OrdPath<E> {
     fn clone(&self) -> Self {
-        let mut clone = Self::with_capacity(self.len(), self.encoding().clone());
-        unsafe {
-            std::ptr::copy(self.as_ptr(), clone.as_mut_ptr(), clone.len());
+        Self {
+            enc: self.enc.clone(),
+            raw: self.raw.clone(),
         }
-        clone.len = self.len;
-        clone
     }
 }
 
@@ -335,16 +283,6 @@ impl<E: Encoding> PartialOrd for OrdPath<E> {
 impl<E: Encoding> Ord for OrdPath<E> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.as_slice().cmp(&other.as_slice())
-    }
-}
-
-impl<E: Encoding> Drop for OrdPath<E> {
-    fn drop(&mut self) {
-        unsafe {
-            if self.spilled() {
-                std::alloc::dealloc(self.as_ptr() as *mut u8, Self::layout(self.len()));
-            }
-        }
     }
 }
 
@@ -415,28 +353,30 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
     }
 
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> {
-        let mut path = OrdPath::with_capacity(v.len(), enc::Default);
-        let bytes =
-            unsafe { std::slice::from_raw_parts_mut(path.as_mut_ptr() as *mut u8, path.len()) };
-
-        bytes.copy_from_slice(&v);
+        // TODO: Unsound, a reader type would be a solution for that.
+        let path = OrdPath {
+            enc: enc::Default,
+            raw: RawOrdPath::new_heap(v),
+        };
 
         let mut iter = path.into_iter();
         while iter.next().is_some() {}
 
-        path.len |= (iter.len as usize).shl(OrdPath::<enc::Default>::LEN_BITS);
+        let trailing_bits = iter.len;
+        let _path = ManuallyDrop::new(path);
+
+        let path = OrdPath {
+            enc: enc::Default,
+            raw: RawOrdPath::new(v.len(), trailing_bits),
+        };
+
+        unsafe {
+            // TODO: RawOrdPath should be constructed directly from a buffer.
+            std::ptr::copy_nonoverlapping(v.as_ptr(), path.as_ptr() as *mut u8, v.len());
+        }
 
         Ok(path)
     }
-}
-
-union OrdPathData {
-    inline: [MaybeUninit<u8>; Self::INLINE_LEN],
-    heap: NonNull<u8>,
-}
-
-impl OrdPathData {
-    const INLINE_LEN: usize = (usize::BITS / u8::BITS) as usize;
 }
 
 /// An iterator that references an `OrdPath` and yields its items by value.
@@ -510,6 +450,22 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failing_test() {
+        fn assert_path(s: &[i64]) {
+            assert_eq!(
+                OrdPath::from_slice(s, enc::Default)
+                    .unwrap()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                s
+            );
+        }
+        assert_path(&[4295037272, 4295037272, 4440, 88]);
+        //assert_path(&[4295037272, 4295037272, 4440, 344]);
+        //assert_path(&[4295037272, 4295037272, 4440, 4440]);
+    }
 
     #[test]
     fn path_from_slice() {
@@ -641,6 +597,8 @@ mod tests {
     fn path_parent() {
         let path = ordpath![1, 2];
         let parent = path.parent();
+        dbg!(path.as_slice());
+        dbg!(path.parent().unwrap().as_slice());
         assert_eq!(parent, Some(ordpath![1]));
         let grand_parent = parent.and_then(|p| p.parent());
         assert_eq!(grand_parent, Some(ordpath![]));
@@ -657,6 +615,6 @@ mod tests {
         let decoded = bincode::deserialize(&encoded).unwrap();
 
         assert_eq!(path, decoded);
-        assert_eq!(path.trailing_zeros(), decoded.trailing_zeros());
+        assert_eq!(path.raw.trailing_bits(), decoded.raw.trailing_bits());
     }
 }
