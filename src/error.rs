@@ -1,5 +1,6 @@
 use std::error;
 use std::fmt;
+use std::io::Error as IoError;
 use std::num::ParseIntError;
 
 /// A list of possible types of errors that can cause parsing an ORDPATH to fail.
@@ -63,6 +64,12 @@ impl error::Error for Error {
 
 impl From<ParseIntError> for Error {
     fn from(_: ParseIntError) -> Error {
+        Error::new(ErrorKind::InvalidInput)
+    }
+}
+
+impl From<IoError> for Error {
+    fn from(_: IoError) -> Error {
         Error::new(ErrorKind::InvalidInput)
     }
 }

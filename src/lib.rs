@@ -3,7 +3,6 @@
 #![deny(missing_docs)]
 
 use std::fmt;
-use std::mem::ManuallyDrop;
 use std::ops::Shl;
 use std::str::FromStr;
 use std::{cmp::Ordering, ops::Shr};
@@ -14,13 +13,17 @@ use serde::{
     ser::{Serialize, Serializer},
 };
 
-use enc::Encoding;
-pub use error::{Error, ErrorKind};
-use raw::RawOrdPath;
-
+mod buf;
 pub mod enc;
 mod error;
 mod raw;
+mod reader;
+
+use buf::BorrowedBuf;
+use enc::Encoding;
+pub use error::{Error, ErrorKind};
+use raw::RawOrdPath;
+pub use reader::Reader;
 
 /// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
@@ -209,24 +212,21 @@ impl<E: Encoding + Clone> OrdPath<E> {
         }
 
         let mut iter = self.into_iter();
-        let mut consumed_bytes = 0;
-        let mut consumed_bits = 0;
-        if iter.next().is_some() {
-            loop {
-                let tmp_bytes = iter.pos;
-                let tmp_bits = iter.len;
+        let mut consumed_bytes = 0usize;
+        let mut consumed_bits = 0u8;
+        if let Some(value) = iter.next() {
+            let mut stage = self.enc.stage_by_value(value).expect("invalid encoding");
+            while let Some(value) = iter.next() {
+                let bits = consumed_bits + stage.len();
 
-                if iter.next().is_none() {
-                    break;
-                }
-
-                consumed_bytes = tmp_bytes;
-                consumed_bits = tmp_bits;
+                consumed_bytes += bits as usize / 8;
+                consumed_bits = bits % 8;
+                stage = self.enc.stage_by_value(value).expect("invalid encoding");
             }
         }
 
-        let len = consumed_bytes - consumed_bits.div_euclid(8) as usize;
-        let trailing_bits = consumed_bits.wrapping_rem(8);
+        let len = consumed_bytes + consumed_bits.div_ceil(8) as usize;
+        let trailing_bits = (8 - consumed_bits) % 8;
 
         let raw = RawOrdPath::<4>::new(len, trailing_bits);
         if len > 0 {
@@ -311,10 +311,7 @@ impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter::<E> {
-            path: self,
-            pos: 0,
-            acc: 0,
-            len: 0,
+            reader: Reader::new(self.as_slice().into(), BorrowedEncoding(&self.enc)),
         }
     }
 }
@@ -352,22 +349,18 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
         formatter.write_str("bytes")
     }
 
-    fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> {
-        // TODO: Unsound, a reader type would be a solution for that.
-        let path = OrdPath {
-            enc: enc::Default,
-            raw: RawOrdPath::new_heap(v),
-        };
-
-        let mut iter = path.into_iter();
-        while iter.next().is_some() {}
-
-        let trailing_bits = iter.len;
-        let _path = ManuallyDrop::new(path);
+    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+        let enc = enc::Default;
+        let mut reader = Reader::new(Into::<BorrowedBuf>::into(v), BorrowedEncoding(&enc));
+        let mut bits = 0u8;
+        while let Some(value) = reader.read().map_err(E::custom)? {
+            // TODO: It should be possible to avoid convesrion of a value back to the stage.
+            bits = (bits + enc.stage_by_value(value).expect("invalid encoding").len()) % 8;
+        }
 
         let path = OrdPath {
-            enc: enc::Default,
-            raw: RawOrdPath::new(v.len(), trailing_bits),
+            enc,
+            raw: RawOrdPath::new(v.len(), (8 - bits) % 8),
         };
 
         unsafe {
@@ -383,67 +376,26 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 ///
 /// Returned from [`OrdPath::into_iter`].
 pub struct IntoIter<'a, E: Encoding> {
-    path: &'a OrdPath<E>,
-    pos: usize,
-    acc: u64,
-    len: u8,
+    reader: Reader<BorrowedBuf<'a>, BorrowedEncoding<'a, E>>,
 }
 
 impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
     type Item = i64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let prefix = (self.acc >> 56) as u8;
-        let stage = self.path.encoding().stage_by_prefix(prefix);
+        self.reader.read().unwrap()
+    }
+}
 
-        if let Some(stage) = stage {
-            if stage.len() <= self.len {
-                let value = (self.acc << stage.prefix_len()) >> (64 - stage.value_len());
+struct BorrowedEncoding<'enc, E: Encoding>(&'enc E);
 
-                self.acc <<= stage.len();
-                self.len -= stage.len();
+impl<'enc, E: Encoding> Encoding for BorrowedEncoding<'enc, E> {
+    fn stage_by_prefix(&self, prefix: u8) -> Option<&enc::Stage> {
+        self.0.stage_by_prefix(prefix)
+    }
 
-                return Some(value as i64 + stage.value_low());
-            }
-        }
-
-        let left = self.path.len() - self.pos;
-
-        if left > 0 {
-            let consumed = left.min(8);
-            let acc_next = unsafe {
-                let mut buffer = 0u64;
-                self.path
-                    .as_ptr()
-                    .add(self.pos)
-                    .copy_to_nonoverlapping(&mut buffer as *mut u64 as *mut u8, consumed);
-
-                u64::from_be(buffer)
-            };
-
-            let acc = self.acc | acc_next >> self.len;
-            let len = self.len + (consumed as u32 * u8::BITS) as u8;
-
-            let prefix = (acc >> 56) as u8;
-            let stage = self
-                .path
-                .encoding()
-                .stage_by_prefix(prefix)
-                .expect("unknown_prefix");
-
-            self.pos += consumed;
-
-            if stage.len() <= len {
-                let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
-
-                self.acc = acc_next << (stage.len() - self.len);
-                self.len = len - stage.len();
-
-                return Some(value as i64 + stage.value_low());
-            }
-        }
-
-        None
+    fn stage_by_value(&self, value: i64) -> Option<&enc::Stage> {
+        self.0.stage_by_value(value)
     }
 }
 
@@ -597,8 +549,6 @@ mod tests {
     fn path_parent() {
         let path = ordpath![1, 2];
         let parent = path.parent();
-        dbg!(path.as_slice());
-        dbg!(path.parent().unwrap().as_slice());
         assert_eq!(parent, Some(ordpath![1]));
         let grand_parent = parent.and_then(|p| p.parent());
         assert_eq!(grand_parent, Some(ordpath![]));

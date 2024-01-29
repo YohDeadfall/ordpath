@@ -29,13 +29,6 @@ impl<const N: usize> Metadata<N> {
         Self((len << 4) | header)
     }
 
-    pub const fn new_heap(len: usize, trailing_bits: u8) -> Self {
-        assert!(len < usize::MAX >> 4);
-        assert!(trailing_bits < u8::BITS as u8 - 1);
-
-        Self((len << 4) | 8 | trailing_bits as usize)
-    }
-
     pub const fn on_heap(&self) -> bool {
         self.0 & 8 == 8
     }
@@ -120,15 +113,6 @@ impl<const N: usize> RawOrdPath<N> {
         };
 
         Self { meta, data }
-    }
-
-    pub fn new_heap(data: &[u8]) -> Self {
-        let ptr = unsafe { NonNull::new_unchecked(data.as_ptr() as *mut u8) };
-
-        Self {
-            meta: Metadata::<N>::new_heap(data.len(), 0),
-            data: RawOrdPathData::new_heap(ptr),
-        }
     }
 
     pub const fn len(&self) -> usize {
