@@ -404,22 +404,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failing_test() {
-        fn assert_path(s: &[i64]) {
-            assert_eq!(
-                OrdPath::from_slice(s, enc::Default)
-                    .unwrap()
-                    .into_iter()
-                    .collect::<Vec<_>>(),
-                s
-            );
-        }
-        assert_path(&[4295037272, 4295037272, 4440, 88]);
-        //assert_path(&[4295037272, 4295037272, 4440, 344]);
-        //assert_path(&[4295037272, 4295037272, 4440, 4440]);
-    }
-
-    #[test]
     fn path_from_slice() {
         fn assert_path(s: &[i64]) {
             assert_eq!(
