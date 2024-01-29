@@ -12,7 +12,7 @@ pub struct Reader<R: Read, E: Encoding> {
 }
 
 impl<R: Read, E: Encoding> Reader<R, E> {
-    /// To be done.
+    /// Creates a new `Reader<R, E>`.
     pub fn new(src: R, enc: E) -> Self {
         Self {
             src,
@@ -22,7 +22,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         }
     }
 
-    /// To be done.
+    /// Read the next value.
     pub fn read(&mut self) -> Result<Option<i64>, Error> {
         let prefix = (self.acc >> 56) as u8;
         let stage = self.enc.stage_by_prefix(prefix);
