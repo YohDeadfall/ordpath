@@ -2,10 +2,9 @@
 
 #![deny(missing_docs)]
 
+use std::cmp::Ordering;
 use std::fmt;
-use std::ops::Shl;
 use std::str::FromStr;
-use std::{cmp::Ordering, ops::Shr};
 
 #[cfg(feature = "serde")]
 use serde::{
@@ -13,17 +12,17 @@ use serde::{
     ser::{Serialize, Serializer},
 };
 
-mod buf;
 pub mod enc;
 mod error;
 mod raw;
 mod reader;
+mod writer;
 
-use buf::BorrowedBuf;
-use enc::Encoding;
+use enc::{BorrowedEncoding, Encoding};
 pub use error::{Error, ErrorKind};
 use raw::RawOrdPath;
 pub use reader::Reader;
+pub use writer::Writer;
 
 /// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
 #[macro_export]
@@ -71,51 +70,21 @@ impl<E: Encoding> OrdPath<E> {
             len += acc.div_ceil(8);
         }
 
-        if len > usize::MAX.shr(3) {
+        if len > usize::MAX >> 4 {
             return Err(Error::new(ErrorKind::CapacityOverflow));
         }
 
         let tail_bits = acc.wrapping_rem(8) as u8;
         let trailing_bits = (8 - tail_bits).wrapping_rem(8);
 
-        let raw = RawOrdPath::new(len, trailing_bits);
-        let mut ptr = raw.as_ptr() as *mut u8;
-        let mut acc = 0u64;
-        let mut len = 0u8;
+        let mut raw = RawOrdPath::new(len, trailing_bits);
+        let mut writer = Writer::new(raw.as_mut_slice(), BorrowedEncoding(&enc));
 
         for value in s {
-            let value = *value;
-            let stage = enc
-                .stage_by_value(value)
-                .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
-            let prefix = stage.prefix() as u64;
-            let value = (value - stage.value_low()) as u64;
-
-            let buf = match stage.len() < 64 {
-                true => (prefix.shl(stage.value_len()) | value).shl(64 - stage.len()),
-                false => prefix.shl(64 - stage.prefix_len()) | value.shr(stage.len() - 64),
-            };
-
-            acc |= buf >> len;
-            len += stage.len();
-
-            if len >= 64 {
-                unsafe {
-                    ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), 8);
-                    ptr = ptr.add(8);
-                }
-
-                len -= 64;
-                acc = match stage.len() <= 64 {
-                    true => buf.shl(stage.len() - len),
-                    false => value.shl(stage.len() - len),
-                };
-            }
+            writer.write(*value)?;
         }
 
-        unsafe {
-            ptr.copy_from_nonoverlapping(acc.to_be_bytes().as_ptr(), len.div_ceil(8).into());
-        }
+        drop(writer);
 
         Ok(OrdPath { enc, raw })
     }
@@ -161,7 +130,7 @@ impl<E: Encoding> OrdPath<E> {
                         let self_last = self.as_ptr().add(self_len - 1).read();
                         let other_last = other.as_ptr().add(self_len - 1).read();
 
-                        return self_last == other_last & u8::MAX.shl(zeros);
+                        return self_last == other_last & (u8::MAX << zeros);
                     }
                 }
             }
@@ -186,7 +155,7 @@ impl<E: Encoding> OrdPath<E> {
 
     /// Extracts a slice containing the encoded values.
     pub fn as_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
+        self.raw.as_slice()
     }
 }
 
@@ -228,14 +197,14 @@ impl<E: Encoding + Clone> OrdPath<E> {
         let len = consumed_bytes + consumed_bits.div_ceil(8) as usize;
         let trailing_bits = (8 - consumed_bits) % 8;
 
-        let raw = RawOrdPath::<4>::new(len, trailing_bits);
+        let mut raw = RawOrdPath::<4>::new(len, trailing_bits);
         if len > 0 {
             unsafe {
-                let ptr = raw.as_ptr() as *mut u8;
+                let ptr = raw.as_mut_ptr();
                 ptr.copy_from_nonoverlapping(self.raw.as_ptr(), len);
 
                 let ptr = ptr.add(len - 1);
-                ptr.write(ptr.read() & u8::MAX.shl(trailing_bits));
+                ptr.write(ptr.read() & (u8::MAX << trailing_bits));
             }
         }
 
@@ -351,7 +320,7 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 
     fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
         let enc = enc::Default;
-        let mut reader = Reader::new(Into::<BorrowedBuf>::into(v), BorrowedEncoding(&enc));
+        let mut reader = Reader::new(v, BorrowedEncoding(&enc));
         let mut bits = 0u8;
         while let Some(value) = reader.read().map_err(E::custom)? {
             // TODO: It should be possible to avoid convesrion of a value back to the stage.
@@ -376,7 +345,7 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 ///
 /// Returned from [`OrdPath::into_iter`].
 pub struct IntoIter<'a, E: Encoding> {
-    reader: Reader<BorrowedBuf<'a>, BorrowedEncoding<'a, E>>,
+    reader: Reader<&'a [u8], BorrowedEncoding<'a, E>>,
 }
 
 impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
@@ -384,18 +353,6 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.reader.read().unwrap()
-    }
-}
-
-struct BorrowedEncoding<'enc, E: Encoding>(&'enc E);
-
-impl<'enc, E: Encoding> Encoding for BorrowedEncoding<'enc, E> {
-    fn stage_by_prefix(&self, prefix: u8) -> Option<&enc::Stage> {
-        self.0.stage_by_prefix(prefix)
-    }
-
-    fn stage_by_value(&self, value: i64) -> Option<&enc::Stage> {
-        self.0.stage_by_value(value)
     }
 }
 

@@ -1,9 +1,7 @@
-use std::{
-    alloc,
-    alloc::Layout,
-    mem::{align_of, size_of, MaybeUninit},
-    ptr::{addr_of, addr_of_mut, NonNull},
-};
+use std::alloc::{self, Layout};
+use std::mem::{align_of, size_of, MaybeUninit};
+use std::ptr::{addr_of, addr_of_mut, NonNull};
+use std::slice;
 
 #[derive(Clone, Copy)]
 struct Metadata<const N: usize>(usize);
@@ -149,6 +147,14 @@ impl<const N: usize> RawOrdPath<N> {
                     .byte_sub(Self::INLINE_DATA_OFFSET)
             }
         }
+    }
+
+    pub const fn as_slice(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
     }
 }
 
