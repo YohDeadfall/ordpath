@@ -2,7 +2,7 @@ use std::{
     alloc,
     alloc::Layout,
     mem::{align_of, size_of, MaybeUninit},
-    ptr::{addr_of, NonNull},
+    ptr::{addr_of, addr_of_mut, NonNull},
 };
 
 #[derive(Clone, Copy)]
@@ -136,22 +136,36 @@ impl<const N: usize> RawOrdPath<N> {
             }
         }
     }
+
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        unsafe {
+            if self.meta.on_heap() {
+                self.data.heap.as_ptr()
+            } else {
+                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilizedi
+                // https://github.com/rust-lang/rust/issues/96097
+                addr_of_mut!(self.data.inline)
+                    .cast::<u8>()
+                    .byte_sub(Self::INLINE_DATA_OFFSET)
+            }
+        }
+    }
 }
 
 impl<const N: usize> Clone for RawOrdPath<N> {
     fn clone(&self) -> Self {
         unsafe {
             if self.meta.on_heap() {
+                let mut other = Self::new(self.len(), self.trailing_bits());
+                self.as_ptr()
+                    .copy_to_nonoverlapping(other.as_mut_ptr() as *mut u8, self.len());
+
+                other
+            } else {
                 Self {
                     meta: self.meta,
                     data: RawOrdPathData::new_inline(self.data.inline),
                 }
-            } else {
-                let other = Self::new(self.len(), self.trailing_bits());
-                self.as_ptr()
-                    .copy_to_nonoverlapping(other.as_ptr() as *mut u8, self.len());
-
-                other
             }
         }
     }
@@ -162,7 +176,7 @@ impl<const N: usize> Drop for RawOrdPath<N> {
         if self.meta.on_heap() {
             unsafe {
                 alloc::dealloc(
-                    self.as_ptr() as *mut u8,
+                    self.as_mut_ptr(),
                     Layout::from_size_align_unchecked(self.len(), align_of::<u8>()),
                 );
             }
