@@ -3,7 +3,7 @@ use std::io::Write;
 use crate::enc::Encoding;
 use crate::{Error, ErrorKind};
 
-/// To be done
+/// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
 pub struct Writer<W: Write, E: Encoding> {
     dst: W,
     enc: E,
@@ -12,7 +12,7 @@ pub struct Writer<W: Write, E: Encoding> {
 }
 
 impl<W: Write, E: Encoding> Writer<W, E> {
-    /// To be done.
+    /// Creates a new `Writer<R, E>`.
     pub fn new(dst: W, enc: E) -> Self {
         Self {
             dst,
@@ -22,7 +22,7 @@ impl<W: Write, E: Encoding> Writer<W, E> {
         }
     }
 
-    /// To be done.
+    /// Write a value into this writer.
     pub fn write(&mut self, value: i64) -> Result<(), Error> {
         let stage = self
             .enc
