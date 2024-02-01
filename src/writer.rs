@@ -36,21 +36,26 @@ impl<W: Write, E: Encoding> Writer<W, E> {
             false => prefix << (64 - stage.prefix_len()) | (value >> (stage.len() - 64)),
         };
 
-        self.acc |= buf >> self.len;
-        self.len += stage.len();
+        let len = self.len & 127;
+        self.acc |= buf >> len;
 
-        if self.len >= 64 {
-            let left = self.len - 64;
-
-            self.len = 0;
-            self.dst.write_all(&self.acc.to_be_bytes())?;
-            self.len = left;
-            self.acc = if stage.len() <= 64 {
-                buf << (stage.len() - left)
+        let len = len + stage.len();
+        self.len = 128
+            | if len < 64 {
+                len
             } else {
-                value << (stage.len() - left)
+                let left = len - 64;
+
+                self.len = 0;
+                self.dst.write_all(&self.acc.to_be_bytes())?;
+                self.acc = if stage.len() <= 64 {
+                    buf << (stage.len() - left)
+                } else {
+                    value << (stage.len() - left)
+                };
+
+                left
             };
-        }
 
         Ok(())
     }
@@ -59,9 +64,13 @@ impl<W: Write, E: Encoding> Writer<W, E> {
 impl<W: Write, E: Encoding> Drop for Writer<W, E> {
     fn drop(&mut self) {
         if self.len > 0 {
-            let len = self.len.div_ceil(8) as usize;
-            let buf = &self.acc.to_be_bytes()[..len];
-            _ = self.dst.write_all(buf);
+            let len = self.len as usize & 127;
+            let acc = self.acc | (1 << (63 - len));
+
+            let len = (len + 1).div_ceil(8);
+            let acc = &acc.to_be_bytes()[..len];
+
+            _ = self.dst.write_all(acc);
         }
     }
 }

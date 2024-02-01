@@ -8,7 +8,7 @@ pub struct Reader<R: Read, E: Encoding> {
     src: R,
     enc: E,
     acc: u64,
-    acc_len: u8,
+    len: u8,
 }
 
 impl<R: Read, E: Encoding> Reader<R, E> {
@@ -17,8 +17,8 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         Self {
             src,
             enc,
-            acc: 0,
-            acc_len: 0,
+            acc: 1 << 63,
+            len: 0,
         }
     }
 
@@ -28,11 +28,11 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         let stage = self.enc.stage_by_prefix(prefix);
 
         if let Some(stage) = stage {
-            if stage.len() <= self.acc_len {
+            if stage.len() <= self.len {
                 let value = (self.acc << stage.prefix_len()) >> (64 - stage.value_len());
 
                 self.acc <<= stage.len();
-                self.acc_len -= stage.len();
+                self.len -= stage.len();
 
                 return Ok(Some(value as i64 + stage.value_low()));
             }
@@ -43,24 +43,38 @@ impl<R: Read, E: Encoding> Reader<R, E> {
 
         if consumed > 0 {
             let acc_next = u64::from_be_bytes(buf);
-            let acc = self.acc | acc_next >> self.acc_len;
-            let len = self.acc_len + consumed as u8 * 8;
+            let acc = if self.len > 0 {
+                acc_next >> self.len | self.acc
+            } else {
+                acc_next
+            };
+
+            let len = self.len + consumed as u8 * 8;
             let prefix = (acc >> 56) as u8;
 
             if let Some(stage) = self.enc.stage_by_prefix(prefix) {
                 if stage.len() <= len {
-                    let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
+                    self.acc = acc_next << (stage.len() - self.len);
+                    self.len = {
+                        let left = len - stage.len();
+                        if len < 64 {
+                            left.min(63u8.saturating_sub(self.acc.trailing_zeros() as u8))
+                        } else {
+                            left
+                        }
+                    };
 
-                    self.acc = acc_next << (stage.len() - self.acc_len);
-                    self.acc_len = len - stage.len();
+                    let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
 
                     return Ok(Some(value as i64 + stage.value_low()));
                 }
             }
-
-            return Err(Error::new(ErrorKind::InvalidInput));
         }
 
-        Ok(None)
+        if self.len == 0 && self.acc == 1 << 63 {
+            Ok(None)
+        } else {
+            Err(Error::new(ErrorKind::InvalidInput))
+        }
     }
 }

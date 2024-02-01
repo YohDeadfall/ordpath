@@ -19,21 +19,19 @@ impl<const N: usize> Metadata<N> {
         meta_bits.div_ceil(u8::BITS) as usize
     }
 
-    pub const fn new(len: usize, trailing_bits: u8) -> Result<Self, Error> {
-        if len < usize::MAX >> 4 {
-            assert!(trailing_bits < u8::BITS as u8 - 1);
+    pub const fn new(len: usize) -> Result<Self, Error> {
+        if len < isize::MAX as usize {
+            let heap = len > RawOrdPath::<N>::INLINE_DATA_LEN;
+            let meta = (len << 1) | heap as usize;
 
-            let on_heap = len > RawOrdPath::<N>::INLINE_DATA_LEN;
-            let header = ((on_heap as usize) << 3) | trailing_bits as usize;
-
-            Ok(Self((len << 4) | header))
+            Ok(Self(meta))
         } else {
             Err(Error::new(ErrorKind::CapacityOverflow))
         }
     }
 
     pub const fn on_heap(&self) -> bool {
-        self.0 & 8 == 8
+        self.0 & 1 == 1
     }
 
     pub const fn len(&self) -> usize {
@@ -43,11 +41,7 @@ impl<const N: usize> Metadata<N> {
             self.0 & Self::INLINE_META_MASK
         };
 
-        meta >> 4
-    }
-
-    pub const fn trailing_bits(&self) -> u8 {
-        self.0 as u8 & 7
+        meta >> 1
     }
 }
 
@@ -105,8 +99,8 @@ impl<const N: usize> RawOrdPath<N> {
         0
     };
 
-    pub fn new(len: usize, trailing_bits: u8) -> Result<Self, Error> {
-        let meta = Metadata::<N>::new(len, trailing_bits)?;
+    pub fn new(len: usize) -> Result<Self, Error> {
+        let meta = Metadata::<N>::new(len)?;
         let data = if meta.on_heap() {
             let layout = Layout::array::<u8>(len).unwrap();
             let ptr = NonNull::new(unsafe { alloc::alloc(layout) }).unwrap();
@@ -121,10 +115,6 @@ impl<const N: usize> RawOrdPath<N> {
 
     pub const fn len(&self) -> usize {
         self.meta.len()
-    }
-
-    pub const fn trailing_bits(&self) -> u8 {
-        self.meta.trailing_bits()
     }
 
     pub const fn as_ptr(&self) -> *const u8 {
@@ -169,7 +159,7 @@ impl<const N: usize> Clone for RawOrdPath<N> {
         unsafe {
             if self.meta.on_heap() {
                 // SAFETY: Safe becuase the clone has the same length.
-                let mut other = Self::new(self.len(), self.trailing_bits()).unwrap_unchecked();
+                let mut other = Self::new(self.len()).unwrap_unchecked();
                 self.as_ptr()
                     .copy_to_nonoverlapping(other.as_mut_ptr() as *mut u8, self.len());
 
