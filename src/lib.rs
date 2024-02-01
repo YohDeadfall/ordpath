@@ -70,14 +70,10 @@ impl<E: Encoding> OrdPath<E> {
             len += acc.div_ceil(8);
         }
 
-        if len > usize::MAX >> 4 {
-            return Err(Error::new(ErrorKind::CapacityOverflow));
-        }
-
         let tail_bits = acc.wrapping_rem(8) as u8;
         let trailing_bits = (8 - tail_bits).wrapping_rem(8);
 
-        let mut raw = RawOrdPath::new(len, trailing_bits);
+        let mut raw = RawOrdPath::new(len, trailing_bits)?;
         let mut writer = Writer::new(raw.as_mut_slice(), BorrowedEncoding(&enc));
 
         for value in s {
@@ -197,21 +193,22 @@ impl<E: Encoding + Clone> OrdPath<E> {
         let len = consumed_bytes + consumed_bits.div_ceil(8) as usize;
         let trailing_bits = (8 - consumed_bits) % 8;
 
-        let mut raw = RawOrdPath::<4>::new(len, trailing_bits);
-        if len > 0 {
-            unsafe {
+        unsafe {
+            // SAFETY: Safe, the parent is shorter than self.
+            let mut raw = RawOrdPath::<4>::new(len, trailing_bits).unwrap_unchecked();
+            if len > 0 {
                 let ptr = raw.as_mut_ptr();
                 ptr.copy_from_nonoverlapping(self.raw.as_ptr(), len);
 
                 let ptr = ptr.add(len - 1);
                 ptr.write(ptr.read() & (u8::MAX << trailing_bits));
             }
-        }
 
-        Some(Self {
-            enc: self.enc.clone(),
-            raw,
-        })
+            Some(Self {
+                enc: self.enc.clone(),
+                raw,
+            })
+        }
     }
 }
 
@@ -329,7 +326,7 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 
         let path = OrdPath {
             enc,
-            raw: RawOrdPath::new(v.len(), (8 - bits) % 8),
+            raw: RawOrdPath::new(v.len(), (8 - bits) % 8).map_err(E::custom)?,
         };
 
         unsafe {

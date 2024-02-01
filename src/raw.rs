@@ -3,6 +3,8 @@ use std::mem::{align_of, size_of, MaybeUninit};
 use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::slice;
 
+use crate::{Error, ErrorKind};
+
 #[derive(Clone, Copy)]
 struct Metadata<const N: usize>(usize);
 
@@ -17,14 +19,17 @@ impl<const N: usize> Metadata<N> {
         meta_bits.div_ceil(u8::BITS) as usize
     }
 
-    pub const fn new(len: usize, trailing_bits: u8) -> Self {
-        assert!(len < usize::MAX >> 4);
-        assert!(trailing_bits < u8::BITS as u8 - 1);
+    pub const fn new(len: usize, trailing_bits: u8) -> Result<Self, Error> {
+        if len < usize::MAX >> 4 {
+            assert!(trailing_bits < u8::BITS as u8 - 1);
 
-        let on_heap = len > RawOrdPath::<N>::INLINE_DATA_LEN;
-        let header = ((on_heap as usize) << 3) | trailing_bits as usize;
+            let on_heap = len > RawOrdPath::<N>::INLINE_DATA_LEN;
+            let header = ((on_heap as usize) << 3) | trailing_bits as usize;
 
-        Self((len << 4) | header)
+            Ok(Self((len << 4) | header))
+        } else {
+            Err(Error::new(ErrorKind::CapacityOverflow))
+        }
     }
 
     pub const fn on_heap(&self) -> bool {
@@ -83,6 +88,7 @@ impl<const N: usize> RawOrdPath<N> {
                 rhs
             }
         }
+
         let data = max(N, size_of::<NonNull<u8>>());
         let len = Metadata::<N>::size_for(data);
 
@@ -99,8 +105,8 @@ impl<const N: usize> RawOrdPath<N> {
         0
     };
 
-    pub fn new(len: usize, trailing_bits: u8) -> Self {
-        let meta = Metadata::<N>::new(len, trailing_bits);
+    pub fn new(len: usize, trailing_bits: u8) -> Result<Self, Error> {
+        let meta = Metadata::<N>::new(len, trailing_bits)?;
         let data = if meta.on_heap() {
             let layout = Layout::array::<u8>(len).unwrap();
             let ptr = NonNull::new(unsafe { alloc::alloc(layout) }).unwrap();
@@ -110,7 +116,7 @@ impl<const N: usize> RawOrdPath<N> {
             RawOrdPathData::<N>::new()
         };
 
-        Self { meta, data }
+        Ok(Self { meta, data })
     }
 
     pub const fn len(&self) -> usize {
@@ -162,7 +168,8 @@ impl<const N: usize> Clone for RawOrdPath<N> {
     fn clone(&self) -> Self {
         unsafe {
             if self.meta.on_heap() {
-                let mut other = Self::new(self.len(), self.trailing_bits());
+                // SAFETY: Safe becuase the clone has the same length.
+                let mut other = Self::new(self.len(), self.trailing_bits()).unwrap_unchecked();
                 self.as_ptr()
                     .copy_to_nonoverlapping(other.as_mut_ptr() as *mut u8, self.len());
 

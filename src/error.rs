@@ -39,12 +39,12 @@ pub struct Error {
 }
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind) -> Error {
+    pub(crate) const fn new(kind: ErrorKind) -> Error {
         Error { kind }
     }
 
     /// Returns the corresponding [`ErrorKind`] for this error.
-    pub fn kind(&self) -> ErrorKind {
+    pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 }
