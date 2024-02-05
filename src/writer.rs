@@ -4,21 +4,21 @@ use crate::enc::Encoding;
 use crate::{Error, ErrorKind};
 
 /// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
-pub struct Writer<W: Write, E: Encoding> {
-    dst: W,
-    enc: E,
+pub struct Writer<W: Write + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
+    enc: E,
+    dst: W,
 }
 
 impl<W: Write, E: Encoding> Writer<W, E> {
     /// Creates a new `Writer<R, E>`.
     pub fn new(dst: W, enc: E) -> Self {
         Self {
-            dst,
-            enc,
             acc: 0,
             len: 0,
+            enc,
+            dst,
         }
     }
 
@@ -61,7 +61,7 @@ impl<W: Write, E: Encoding> Writer<W, E> {
     }
 }
 
-impl<W: Write, E: Encoding> Drop for Writer<W, E> {
+impl<W: Write + ?Sized, E: Encoding> Drop for Writer<W, E> {
     fn drop(&mut self) {
         if self.len > 0 {
             let len = self.len as usize & 127;
