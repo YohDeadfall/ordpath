@@ -2,6 +2,7 @@
 
 #![deny(missing_docs)]
 
+use std::iter::FusedIterator;
 use std::str::FromStr;
 use std::{cmp::Ordering, io::Write};
 use std::{fmt, io};
@@ -374,6 +375,8 @@ impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
         self.reader.read().unwrap()
     }
 }
+
+impl<'a, E: Encoding> FusedIterator for IntoIter<'a, E> {}
 
 #[cfg(test)]
 mod tests {
