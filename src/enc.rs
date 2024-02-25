@@ -63,6 +63,16 @@ pub trait Encoding {
     fn stage_by_value(&self, value: i64) -> Option<&Stage>;
 }
 
+impl<E: Encoding + ?Sized> Encoding for &E {
+    fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage> {
+        (*self).stage_by_prefix(prefix)
+    }
+
+    fn stage_by_value(&self, value: i64) -> Option<&Stage> {
+        (*self).stage_by_value(value)
+    }
+}
+
 pub(crate) struct BorrowedEncoding<'e, E: Encoding>(pub &'e E);
 
 impl<'e, E: Encoding> Encoding for BorrowedEncoding<'e, E> {

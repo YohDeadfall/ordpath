@@ -19,7 +19,7 @@ mod raw;
 mod reader;
 mod writer;
 
-use enc::{BorrowedEncoding, Encoding};
+use enc::Encoding;
 pub use error::{Error, ErrorKind};
 use raw::RawOrdPath;
 pub use reader::Reader;
@@ -69,7 +69,7 @@ impl<E: Encoding> OrdPath<E> {
     /// Creates a new `OrdPath` containing elements of the slice with the specified encoding.
     pub fn from_slice(s: &[i64], enc: E) -> Result<OrdPath<E>, Error> {
         let mut len = Counter(0);
-        let mut writer = Writer::new(len.by_ref(), BorrowedEncoding(&enc));
+        let mut writer = Writer::new(len.by_ref(), &enc);
 
         for value in s {
             writer.write(*value)?;
@@ -78,7 +78,7 @@ impl<E: Encoding> OrdPath<E> {
         drop(writer);
 
         let mut raw = RawOrdPath::new(len.0)?;
-        let mut writer = Writer::new(raw.as_mut_slice(), BorrowedEncoding(&enc));
+        let mut writer = Writer::new(raw.as_mut_slice(), &enc);
 
         for value in s {
             writer.write(*value)?;
@@ -180,7 +180,7 @@ impl<E: Encoding + Clone> OrdPath<E> {
             return None;
         }
 
-        let mut stages = Reader::new(self.as_slice(), BorrowedEncoding(&self.enc));
+        let mut stages = Reader::new(self.as_slice(), &self.enc);
         let mut consumed_bytes = 0usize;
         let mut consumed_bits = 0u8;
         if let Ok(Some((_, stage))) = stages.read_stage() {
@@ -311,7 +311,7 @@ impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter::<E> {
-            reader: Reader::new(self.as_slice().into(), BorrowedEncoding(&self.enc)),
+            reader: Reader::new(self.as_slice().into(), &self.enc),
         }
     }
 }
@@ -365,7 +365,7 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
 ///
 /// Returned from [`OrdPath::into_iter`].
 pub struct IntoIter<'a, E: Encoding> {
-    reader: Reader<&'a [u8], BorrowedEncoding<'a, E>>,
+    reader: Reader<&'a [u8], &'a E>,
 }
 
 impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
