@@ -180,17 +180,17 @@ impl<E: Encoding + Clone> OrdPath<E> {
             return None;
         }
 
-        let mut iter = self.into_iter();
+        let mut stages = Reader::new(self.as_slice(), BorrowedEncoding(&self.enc));
         let mut consumed_bytes = 0usize;
         let mut consumed_bits = 0u8;
-        if let Some(value) = iter.next() {
-            let mut stage = self.enc.stage_by_value(value).expect("invalid encoding");
-            while let Some(value) = iter.next() {
-                let bits = consumed_bits + stage.len();
+        if let Ok(Some((_, stage))) = stages.read_stage() {
+            let mut prev_len = stage.len();
+            while let Ok(Some((_, stage))) = stages.read_stage() {
+                let bits = consumed_bits + prev_len;
 
                 consumed_bytes += bits as usize / 8;
                 consumed_bits = bits & 7;
-                stage = self.enc.stage_by_value(value).expect("invalid encoding");
+                prev_len = stage.len();
             }
         }
 

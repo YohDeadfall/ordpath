@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use crate::enc::Encoding;
+use crate::enc::{Encoding, Stage};
 use crate::{Error, ErrorKind};
 
 /// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
@@ -22,8 +22,13 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         }
     }
 
-    /// Read the next value.
+    /// Reads the next value.
     pub fn read(&mut self) -> Result<Option<i64>, Error> {
+        self.read_stage().map(|r| r.map(|o| o.0))
+    }
+
+    /// Reads the next value and provides the corresponding stage.
+    pub fn read_stage(&mut self) -> Result<Option<(i64, &Stage)>, Error> {
         let prefix = (self.acc >> 56) as u8;
         let stage = self.enc.stage_by_prefix(prefix);
 
@@ -34,7 +39,8 @@ impl<R: Read, E: Encoding> Reader<R, E> {
                 self.acc <<= stage.len();
                 self.len -= stage.len();
 
-                return Ok(Some(value as i64 + stage.value_low()));
+                let value = value as i64 + stage.value_low();
+                return Ok(Some((value, stage)));
             }
         }
 
@@ -64,9 +70,9 @@ impl<R: Read, E: Encoding> Reader<R, E> {
                         }
                     };
 
-                    let value = (acc << stage.prefix_len()) >> (64 - stage.value_len());
-
-                    return Ok(Some(value as i64 + stage.value_low()));
+                    let value = ((acc << stage.prefix_len()) >> (64 - stage.value_len())) as i64
+                        + stage.value_low();
+                    return Ok(Some((value, stage)));
                 }
             }
         }
