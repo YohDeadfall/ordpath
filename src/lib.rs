@@ -157,6 +157,26 @@ impl<E: Encoding> OrdPath<E> {
     pub fn as_slice(&self) -> &[u8] {
         self.raw.as_slice()
     }
+
+    /// Returns an iterator over the encoded values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate ordpath;
+    /// # use ordpath::OrdPath;
+    /// let path = ordpath![1, 2, 3, 4];
+    ///
+    /// // Print 1, 2, 3, 4
+    /// for x in path.iter() {
+    ///     println!("{x}");
+    /// }
+    /// ```
+    pub fn iter(&self) -> Iter<'_, E> {
+        Iter {
+            reader: Reader::new(self.as_slice(), self.encoding()),
+        }
+    }
 }
 
 impl<E: Encoding + Clone> OrdPath<E> {
@@ -306,15 +326,32 @@ impl<E: Encoding> fmt::Display for OrdPath<E> {
 }
 
 impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
-    type IntoIter = IntoIter<'a, E>;
+    type IntoIter = Iter<'a, E>;
     type Item = i64;
 
     fn into_iter(self) -> Self::IntoIter {
-        IntoIter::<E> {
+        Iter::<E> {
             reader: Reader::new(self.as_slice().into(), &self.enc),
         }
     }
 }
+
+/// An iterator that references an `OrdPath` and yields its items by value.
+///
+/// Returned from [`OrdPath::into_iter`].
+pub struct Iter<'a, E: Encoding> {
+    reader: Reader<&'a [u8], &'a E>,
+}
+
+impl<'a, E: Encoding> Iterator for Iter<'a, E> {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.reader.read().unwrap()
+    }
+}
+
+impl<'a, E: Encoding> FusedIterator for Iter<'a, E> {}
 
 #[cfg(feature = "serde")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
@@ -360,23 +397,6 @@ impl<'de> Visitor<'de> for OrdPathVisitor {
         })
     }
 }
-
-/// An iterator that references an `OrdPath` and yields its items by value.
-///
-/// Returned from [`OrdPath::into_iter`].
-pub struct IntoIter<'a, E: Encoding> {
-    reader: Reader<&'a [u8], &'a E>,
-}
-
-impl<'a, E: Encoding> Iterator for IntoIter<'a, E> {
-    type Item = i64;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.reader.read().unwrap()
-    }
-}
-
-impl<'a, E: Encoding> FusedIterator for IntoIter<'a, E> {}
 
 #[cfg(test)]
 mod tests {
