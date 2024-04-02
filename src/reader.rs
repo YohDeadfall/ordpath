@@ -7,16 +7,29 @@ use crate::{Error, ErrorKind};
 pub struct Reader<R: Read + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
+    end: u8,
     enc: E,
     src: R,
 }
 
 impl<R: Read, E: Encoding> Reader<R, E> {
-    /// Creates a new `Reader<R, E>`.
-    pub fn new(src: R, enc: E) -> Self {
+    /// Creates a new `Reader<R, E>` expecting data to be terminated by a set bit.
+    pub fn one_terminated(src: R, enc: E) -> Self {
         Self {
             acc: 1 << 63,
             len: 0,
+            end: 1,
+            enc,
+            src,
+        }
+    }
+
+    /// Creates a new `Reader<R, E>` expecting data to have no terminating bit.
+    pub fn zero_terminated(src: R, enc: E) -> Self {
+        Self {
+            acc: 1 << 63,
+            len: 0,
+            end: 0,
             enc,
             src,
         }
@@ -77,7 +90,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
             }
         }
 
-        if self.len == 0 && self.acc == 1 << 63 {
+        if self.len == 0 && self.acc == (self.end as u64) << 63 {
             Ok(None)
         } else {
             Err(Error::new(ErrorKind::InvalidInput))
