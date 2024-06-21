@@ -73,18 +73,6 @@ impl<E: Encoding + ?Sized> Encoding for &E {
     }
 }
 
-pub(crate) struct BorrowedEncoding<'e, E: Encoding>(pub &'e E);
-
-impl<'e, E: Encoding> Encoding for BorrowedEncoding<'e, E> {
-    fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage> {
-        self.0.stage_by_prefix(prefix)
-    }
-
-    fn stage_by_value(&self, value: i64) -> Option<&Stage> {
-        self.0.stage_by_value(value)
-    }
-}
-
 macro_rules! replace_expr {
     ($e:expr; $s:expr) => {
         $s
