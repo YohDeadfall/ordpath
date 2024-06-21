@@ -125,13 +125,13 @@ impl<E: Encoding> OrdPath<E> {
 
                 if self_slice.eq(other_slice) {
                     let self_last = self.as_ptr().add(self_len - 1).read();
-                    let self_tail = self_last.trailing_zeros() + 1;
+                    let self_last_len = self_last.trailing_zeros() + 1;
 
                     let other_last = other.as_ptr().add(self_len - 1).read();
-                    let other_tail = other_last.trailing_zeros() + 1;
+                    let other_last_len = other_last.trailing_zeros() + 1;
 
-                    return self_tail > other_tail
-                        && (self_last >> self_tail) == (other_last >> self_tail);
+                    return self_last_len > other_last_len
+                        && (self_last >> self_last_len) == (other_last >> self_last_len);
                 }
             }
         }
