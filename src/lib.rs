@@ -111,8 +111,8 @@ impl<E: Encoding> OrdPath<E> {
     /// # #[macro_use] extern crate ordpath;
     /// # use ordpath::OrdPath;
     /// let a = ordpath![1, 2];
-    /// let c = ordpath![1, 2, 3];
-    /// assert!(a.is_ancestor_of(&c));
+    /// let d = ordpath![1, 2, 3];
+    /// assert!(a.is_ancestor_of(&d));
     /// ```
     pub fn is_ancestor_of(&self, other: &Self) -> bool {
         let self_len = self.len();
