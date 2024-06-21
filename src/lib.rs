@@ -139,6 +139,21 @@ impl<E: Encoding> OrdPath<E> {
         self_len == 0 && other_len != 0
     }
 
+    /// Returns `true` if `self` is a descendant of `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate ordpath;
+    /// # use ordpath::OrdPath;
+    /// let a = ordpath![1, 2];
+    /// let d = ordpath![1, 2, 3];
+    /// assert!(d.is_descendant_of(&a));
+    /// ```
+    pub fn is_descendant_of(&self, other: &Self) -> bool {
+        other.is_ancestor_of(self)
+    }
+
     /// Returns a reference to the used encoding.
     pub fn encoding(&self) -> &E {
         &self.enc
