@@ -1,5 +1,7 @@
 //! Types and traits used for encoding.
 
+use std::fmt;
+
 /// An encoding stage used for vlue compression.
 pub struct Stage {
     prefix_len: u8,
@@ -53,6 +55,31 @@ impl Stage {
     }
 }
 
+impl fmt::Debug for Stage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: Use field_with when it's stabilized (https://github.com/rust-lang/rust/issues/117729).
+        struct Prefix<'s>(&'s Stage);
+
+        impl<'s> fmt::Debug for Prefix<'s> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let prefix = self.0.prefix();
+                let prefix_len = self.0.prefix_len() as usize;
+
+                f.write_fmt(format_args!("{prefix:b>0prefix_len$}"))
+            }
+        }
+
+        let prefix = Prefix(self);
+
+        f.debug_struct("Stage")
+            .field("prefix", &prefix)
+            .field("value_len", &self.value_len())
+            .field("value_low", &self.value_low())
+            .field("value_high", &self.value_high())
+            .finish()
+    }
+}
+
 /// An implementation of `Alloctor` is responsible for providing a [`Stage`]
 /// for the provided value or prefix.
 pub trait Encoding {
@@ -88,7 +115,7 @@ macro_rules! count {
 macro_rules! encoding {
     ($v:vis $t:ident :[$(($prefix:expr, $prefix_len:expr, $value_len:expr)),+]) => {
         #[allow(missing_docs)]
-        #[derive(Copy, Clone, Default, Debug)]
+        #[derive(Copy, Clone, Default)]
         $v struct $t;
 
         impl $t {
@@ -165,6 +192,12 @@ macro_rules! encoding {
                     ::std::cmp::Ordering::Equal
                 })
                 .map(|index| &Self::STAGES[index]).ok()
+            }
+        }
+
+        impl std::fmt::Debug for $t {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct(std::stringify!($t)).field("stages", &Self::STAGES).finish()
             }
         }
     };
