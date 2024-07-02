@@ -29,7 +29,7 @@ pub use writer::Writer;
 #[macro_export]
 macro_rules! ordpath {
     ($($x:expr),*$(,)*) => {
-        OrdPath::from_slice(&vec![$($x),*], $crate::enc::Default).unwrap()
+        <OrdPath>::from_slice(&vec![$($x),*], $crate::enc::Default).unwrap()
     };
 }
 
@@ -50,15 +50,17 @@ impl Write for Counter {
     }
 }
 
+const USIZE_BYTES: usize = (usize::BITS / 8) as usize;
+
 /// A compressed binary container of hierarchy labels represented by `i64` values.
-pub struct OrdPath<E: Encoding = enc::Default> {
+pub struct OrdPath<E: Encoding = enc::Default, const N: usize = USIZE_BYTES> {
     enc: E,
-    raw: RawOrdPath<4>,
+    raw: RawOrdPath<N>,
 }
 
-impl<E: Encoding> OrdPath<E> {
+impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
-    pub fn from_str(s: &str, enc: E) -> Result<OrdPath<E>, Error> {
+    pub fn from_str(s: &str, enc: E) -> Result<Self, Error> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
             v.push(i64::from_str_radix(x, 10)?);
@@ -67,7 +69,7 @@ impl<E: Encoding> OrdPath<E> {
     }
 
     /// Creates a new `OrdPath` containing elements of the slice with the specified encoding.
-    pub fn from_slice(s: &[i64], enc: E) -> Result<OrdPath<E>, Error> {
+    pub fn from_slice(s: &[i64], enc: E) -> Result<Self, Error> {
         let mut len = Counter(0);
         let mut writer = Writer::one_terminated(len.by_ref(), &enc);
 
@@ -194,7 +196,7 @@ impl<E: Encoding> OrdPath<E> {
     }
 }
 
-impl<E: Encoding + Clone> OrdPath<E> {
+impl<E: Encoding + Clone, const N: usize> OrdPath<E, N> {
     /// Returns the `OrdPath<E>` without its final element, if there is one.
     ///
     /// # Examples
@@ -237,7 +239,7 @@ impl<E: Encoding + Clone> OrdPath<E> {
 
         unsafe {
             // SAFETY: The resulting path is shorter that self.
-            let mut raw = RawOrdPath::<4>::new(len).unwrap_unchecked();
+            let mut raw = RawOrdPath::<N>::new(len).unwrap_unchecked();
 
             if len > 0 {
                 let ptr = raw.as_mut_ptr();
@@ -254,10 +256,10 @@ impl<E: Encoding + Clone> OrdPath<E> {
     }
 }
 
-unsafe impl<E: Encoding + Send> Send for OrdPath<E> {}
-unsafe impl<E: Encoding + Sync> Sync for OrdPath<E> {}
+unsafe impl<E: Encoding + Send, const N: usize> Send for OrdPath<E, N> {}
+unsafe impl<E: Encoding + Sync, const N: usize> Sync for OrdPath<E, N> {}
 
-impl FromStr for OrdPath<enc::Default> {
+impl<const N: usize> FromStr for OrdPath<enc::Default, N> {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -265,7 +267,7 @@ impl FromStr for OrdPath<enc::Default> {
     }
 }
 
-impl<E: Encoding + Clone> Clone for OrdPath<E> {
+impl<E: Encoding + Clone, const N: usize> Clone for OrdPath<E, N> {
     fn clone(&self) -> Self {
         Self {
             enc: self.enc.clone(),
@@ -274,21 +276,21 @@ impl<E: Encoding + Clone> Clone for OrdPath<E> {
     }
 }
 
-impl<E: Encoding> PartialEq for OrdPath<E> {
+impl<E: Encoding, const N: usize> PartialEq for OrdPath<E, N> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl<E: Encoding> Eq for OrdPath<E> {}
+impl<E: Encoding, const N: usize> Eq for OrdPath<E, N> {}
 
-impl<E: Encoding> PartialOrd for OrdPath<E> {
+impl<E: Encoding, const N: usize> PartialOrd for OrdPath<E, N> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<E: Encoding> Ord for OrdPath<E> {
+impl<E: Encoding, const N: usize> Ord for OrdPath<E, N> {
     fn cmp(&self, other: &Self) -> Ordering {
         let lhs = self.as_slice();
         let rhs = other.as_slice();
@@ -321,13 +323,13 @@ impl<E: Encoding> Ord for OrdPath<E> {
     }
 }
 
-impl<E: Encoding> fmt::Debug for OrdPath<E> {
+impl<E: Encoding, const N: usize> fmt::Debug for OrdPath<E, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.into_iter()).finish()
     }
 }
 
-impl<E: Encoding> fmt::Display for OrdPath<E> {
+impl<E: Encoding, const N: usize> fmt::Display for OrdPath<E, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         let mut iterator = self.into_iter();
         if let Some(value) = iterator.next() {
@@ -340,7 +342,7 @@ impl<E: Encoding> fmt::Display for OrdPath<E> {
     }
 }
 
-impl<'a, E: Encoding> IntoIterator for &'a OrdPath<E> {
+impl<'a, E: Encoding, const N: usize> IntoIterator for &'a OrdPath<E, N> {
     type IntoIter = Iter<'a, E>;
     type Item = i64;
 
@@ -370,7 +372,7 @@ impl<'a, E: Encoding> FusedIterator for Iter<'a, E> {}
 
 #[cfg(feature = "serde")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<E: Encoding> Serialize for OrdPath<E> {
+impl<E: Encoding, const N: usize> Serialize for OrdPath<E, N> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -381,7 +383,7 @@ impl<E: Encoding> Serialize for OrdPath<E> {
 
 #[cfg(feature = "serde")]
 #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<'de> Deserialize<'de> for OrdPath<enc::Default> {
+impl<'de> Deserialize<'de> for OrdPath {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -395,7 +397,7 @@ struct OrdPathVisitor;
 
 #[cfg(feature = "serde")]
 impl<'de> Visitor<'de> for OrdPathVisitor {
-    type Value = OrdPath<enc::Default>;
+    type Value = OrdPath;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("bytes")
@@ -421,7 +423,7 @@ mod tests {
     fn path_from_slice() {
         fn assert_path(s: &[i64]) {
             assert_eq!(
-                OrdPath::from_slice(s, enc::Default)
+                OrdPath::<enc::Default, USIZE_BYTES>::from_slice(s, enc::Default)
                     .unwrap()
                     .into_iter()
                     .collect::<Vec<_>>(),
@@ -472,7 +474,9 @@ mod tests {
     fn path_to_string() {
         fn assert_path(p: Vec<i64>, s: &str) {
             assert_eq!(
-                OrdPath::from_slice(&p, enc::Default).unwrap().to_string(),
+                OrdPath::<_, USIZE_BYTES>::from_slice(&p, enc::Default)
+                    .unwrap()
+                    .to_string(),
                 s
             );
         }
@@ -501,8 +505,8 @@ mod tests {
     #[test]
     fn path_ordering() {
         fn cmp(lhs: &[i64], rhs: &[i64]) -> Ordering {
-            let lhs = OrdPath::from_slice(lhs, enc::Default).unwrap();
-            let rhs = OrdPath::from_slice(rhs, enc::Default).unwrap();
+            let lhs = <OrdPath>::from_slice(lhs, enc::Default).unwrap();
+            let rhs = <OrdPath>::from_slice(rhs, enc::Default).unwrap();
 
             lhs.cmp(&rhs)
         }
