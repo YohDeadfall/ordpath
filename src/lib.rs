@@ -3,7 +3,7 @@
 #![deny(missing_docs)]
 
 use std::cmp::Ordering;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Binary, Debug, Display, LowerHex, UpperHex};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::iter::FusedIterator;
@@ -340,6 +340,27 @@ impl<E: Encoding, const N: usize, const Z: bool> Display for OrdPath<E, N, Z> {
             }
         }
         Ok(())
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Binary for OrdPath<E, N, Z> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Binary::fmt(&self.raw, f)
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> LowerHex for OrdPath<E, N, Z> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        LowerHex::fmt(&self.raw, f)
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> UpperHex for OrdPath<E, N, Z> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        UpperHex::fmt(&self.raw, f)
     }
 }
 

@@ -1,5 +1,6 @@
 use std::alloc::{self, Layout};
 use std::cmp::Ordering;
+use std::fmt::{Binary, LowerHex, UpperHex};
 use std::mem::{align_of, size_of, MaybeUninit};
 use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::slice;
@@ -254,6 +255,33 @@ impl<const N: usize> Ord for RawOrdPath<N> {
                         .then_with(|| self_mask.cmp(&other_mask))
                 }),
         }
+    }
+}
+
+impl<const N: usize> Binary for RawOrdPath<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.as_slice() {
+            write!(f, "{b:0>8b}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize> LowerHex for RawOrdPath<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.as_slice() {
+            write!(f, "{b:0>8x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<const N: usize> UpperHex for RawOrdPath<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.as_slice() {
+            write!(f, "{b:0>8X}")?;
+        }
+        Ok(())
     }
 }
 
