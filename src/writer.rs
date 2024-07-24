@@ -7,29 +7,18 @@ use crate::{Error, ErrorKind};
 pub struct Writer<W: Write + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
-    end: u8,
+    one: bool,
     enc: E,
     dst: W,
 }
 
 impl<W: Write, E: Encoding> Writer<W, E> {
-    /// Creates a new `Writer<R, E>` which appends a terminating bit to the end of data.
-    pub fn one_terminated(dst: W, enc: E) -> Self {
+    /// Creates a new `Writer<R, E>`.
+    pub fn new(dst: W, enc: E, zero_term: bool) -> Self {
         Self {
             acc: 0,
             len: 0,
-            end: 1,
-            enc,
-            dst,
-        }
-    }
-
-    /// Creates a new `Writer<R, E>` which appends nothing to data.
-    pub fn zero_terminated(dst: W, enc: E) -> Self {
-        Self {
-            acc: 0,
-            len: 0,
-            end: 0,
+            one: !zero_term,
             enc,
             dst,
         }
@@ -72,15 +61,19 @@ impl<W: Write, E: Encoding> Writer<W, E> {
 
         Ok(())
     }
+
+    pub(crate) fn trailing_bits(&self) -> u8 {
+        (192 - self.len) & 7
+    }
 }
 
 impl<W: Write + ?Sized, E: Encoding> Drop for Writer<W, E> {
     fn drop(&mut self) {
         if self.len > 0 {
             let len = self.len as usize & 127;
-            let acc = self.acc | ((self.end as u64) << (63 - len));
+            let acc = self.acc | ((self.one as u64) << (63 - len));
 
-            let len = (len + self.end as usize).div_ceil(8);
+            let len = (len + self.one as usize).div_ceil(8);
             let acc = &acc.to_be_bytes()[..len];
 
             _ = self.dst.write_all(acc);

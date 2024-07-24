@@ -1,11 +1,17 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ordpath::{enc, OrdPath};
+use ordpath::{
+    enc::{self, Encoding},
+    OneTerminatedPath, OrdPath, ZeroTerminatedPath,
+};
 
-fn ordpath_comparison(c: &mut Criterion) {
+fn comparison<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+    c: &mut Criterion,
+    f: F,
+) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = OrdPath::from_slice(&seq, enc::Default).unwrap();
-        let y = OrdPath::from_slice(&seq, enc::Default).unwrap();
+        let x = f(&seq);
+        let y = f(&seq);
 
         c.bench_function(&format!("ordpath_comparison_{}", len), |b| {
             b.iter(|| {
@@ -15,19 +21,41 @@ fn ordpath_comparison(c: &mut Criterion) {
     }
 }
 
-fn ordpath_from_slice(c: &mut Criterion) {
+fn comparison_zero_term(c: &mut Criterion) {
+    comparison(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn comparison_one_term(c: &mut Criterion) {
+    comparison(c, |s| <OneTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn from_slice<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+    c: &mut Criterion,
+    f: F,
+) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len).collect::<Vec<_>>();
 
         c.bench_function(&format!("ordpath_from_slice_{}", len), |b| {
             b.iter(|| {
-                black_box(OrdPath::from_slice(&s, enc::Default).unwrap());
+                black_box(f(&s));
             })
         });
     }
 }
 
-fn ordpath_from_str(c: &mut Criterion) {
+fn from_slice_one_term(c: &mut Criterion) {
+    from_slice(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn from_slice_zero_term(c: &mut Criterion) {
+    from_slice(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn from_str<E: Encoding, const N: usize, const Z: bool, F: Fn(&str) -> OrdPath<E, N, Z>>(
+    c: &mut Criterion,
+    f: F,
+) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len)
             .map(|x| x.to_string())
@@ -36,17 +64,28 @@ fn ordpath_from_str(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_str_{}", len), |b| {
             b.iter(|| {
-                black_box(OrdPath::from_str(&s, enc::Default).unwrap());
+                black_box(f(&s));
             })
         });
     }
 }
 
-fn ordpath_is_ancestor_of(c: &mut Criterion) {
+fn from_str_one_term(c: &mut Criterion) {
+    from_str(c, |s| <ZeroTerminatedPath>::from_str(s, enc::Default));
+}
+
+fn from_str_zero_term(c: &mut Criterion) {
+    from_str(c, |s| <ZeroTerminatedPath>::from_str(s, enc::Default));
+}
+
+fn is_ancestor_of<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+    c: &mut Criterion,
+    f: F,
+) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = OrdPath::from_slice(&seq, enc::Default).unwrap();
-        let y = OrdPath::from_slice(&seq, enc::Default).unwrap();
+        let x = f(&seq);
+        let y = f(&seq);
 
         c.bench_function(&format!("ordpath_is_ancestor_of_{}", len), |b| {
             b.iter(|| {
@@ -56,10 +95,21 @@ fn ordpath_is_ancestor_of(c: &mut Criterion) {
     }
 }
 
-fn ordpath_iteration(c: &mut Criterion) {
+fn is_ancestor_of_one_term(c: &mut Criterion) {
+    is_ancestor_of(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn is_ancestor_of_zero_term(c: &mut Criterion) {
+    is_ancestor_of(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn iteration<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+    c: &mut Criterion,
+    f: F,
+) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len).collect::<Vec<_>>();
-        let p = OrdPath::from_slice(&s, enc::Default).unwrap();
+        let p = f(&s);
 
         c.bench_function(&format!("ordpath_iteration{}", len), |b| {
             b.iter(|| {
@@ -71,13 +121,26 @@ fn ordpath_iteration(c: &mut Criterion) {
     }
 }
 
+fn iteration_one_term(c: &mut Criterion) {
+    iteration(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
+fn iteration_zero_term(c: &mut Criterion) {
+    iteration(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
+}
+
 criterion_group!(
     benches,
-    ordpath_comparison,
-    ordpath_from_slice,
-    ordpath_from_str,
-    ordpath_is_ancestor_of,
-    ordpath_iteration
+    comparison_one_term,
+    comparison_zero_term,
+    from_slice_one_term,
+    from_slice_zero_term,
+    from_str_one_term,
+    from_str_zero_term,
+    is_ancestor_of_one_term,
+    is_ancestor_of_zero_term,
+    iteration_one_term,
+    iteration_zero_term,
 );
 
 criterion_main!(benches);

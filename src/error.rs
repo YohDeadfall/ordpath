@@ -11,8 +11,6 @@ pub enum ErrorKind {
     CapacityOverflow,
     /// A parameter was incorrect.
     InvalidInput,
-    /// Data stored by an [`OrdPath`] is not valid.
-    InvalidData,
 }
 
 impl ErrorKind {
@@ -20,7 +18,6 @@ impl ErrorKind {
         use ErrorKind::*;
         match *self {
             CapacityOverflow => "data capacity exceeds the ord path's maximum",
-            InvalidData => "invalid data",
             InvalidInput => "invalid input",
         }
     }

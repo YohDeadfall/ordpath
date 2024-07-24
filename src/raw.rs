@@ -1,4 +1,5 @@
 use std::alloc::{self, Layout};
+use std::cmp::Ordering;
 use std::mem::{align_of, size_of, MaybeUninit};
 use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::slice;
@@ -100,6 +101,10 @@ impl<const N: usize> RawOrdPath<N> {
     };
 
     pub fn new(len: usize) -> Result<Self, Error> {
+        let len = match len {
+            0 => 0,
+            l => l + 1,
+        };
         let meta = Metadata::<N>::new(len)?;
         let data = if meta.on_heap() {
             let layout = Layout::array::<u8>(len).unwrap();
@@ -113,16 +118,34 @@ impl<const N: usize> RawOrdPath<N> {
         Ok(Self { meta, data })
     }
 
+    #[inline]
     pub const fn len(&self) -> usize {
-        self.meta.len()
+        self.meta.len().saturating_sub(1)
     }
 
+    #[inline]
+    pub const fn trailing_bits(&self) -> u8 {
+        match self.meta.len() {
+            0 => 0,
+            l => unsafe { self.as_ptr().add(l - 1).read() },
+        }
+    }
+
+    #[inline]
+    pub fn set_trailing_bits(&mut self, bits: u8) {
+        match self.meta.len() {
+            0 => (),
+            l => unsafe { self.as_mut_ptr().add(l - 1).write(bits) },
+        };
+    }
+
+    #[inline]
     pub const fn as_ptr(&self) -> *const u8 {
         unsafe {
             if self.meta.on_heap() {
                 self.data.heap.as_ptr()
             } else {
-                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilizedi
+                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
                 // https://github.com/rust-lang/rust/issues/96097
                 addr_of!(self.data.inline)
                     .cast::<u8>()
@@ -131,12 +154,13 @@ impl<const N: usize> RawOrdPath<N> {
         }
     }
 
+    #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         unsafe {
             if self.meta.on_heap() {
                 self.data.heap.as_ptr()
             } else {
-                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilizedi
+                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
                 // https://github.com/rust-lang/rust/issues/96097
                 addr_of_mut!(self.data.inline)
                     .cast::<u8>()
@@ -145,12 +169,91 @@ impl<const N: usize> RawOrdPath<N> {
         }
     }
 
+    #[inline]
     pub const fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
+    #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
+    }
+
+    pub fn is_ancestor(&self, other: &Self) -> bool {
+        let self_slice = self.as_slice();
+        let other_slice = other.as_slice();
+
+        if self_slice.len() > 0 && self_slice.len() <= other_slice.len() {
+            let len = self_slice.len() - 1;
+
+            if self_slice[..len].eq(&other_slice[..len]) {
+                let bits = self.trailing_bits();
+                let mask = if self_slice.len() == other_slice.len() && bits <= other.trailing_bits()
+                {
+                    return false;
+                } else {
+                    u8::MAX << bits
+                };
+
+                let self_last = self_slice[len] & mask;
+                let other_last = other_slice[len] & mask;
+
+                return self_last == other_last;
+            }
+        }
+
+        self_slice.len() == 0 && other_slice.len() != 0
+    }
+}
+
+impl<const N: usize> PartialEq for RawOrdPath<N> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+
+impl<const N: usize> Eq for RawOrdPath<N> {}
+
+impl<const N: usize> PartialOrd for RawOrdPath<N> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<const N: usize> Ord for RawOrdPath<N> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_slice = self.as_slice();
+        let other_slice = other.as_slice();
+
+        match self_slice.len().min(other_slice.len()) {
+            0 => self_slice.len().cmp(&other_slice.len()),
+            l => self_slice[..l - 1]
+                .cmp(&other_slice[..l - 1])
+                .then_with(|| {
+                    let self_mask = u8::MAX
+                        << if l == self_slice.len() {
+                            self.trailing_bits()
+                        } else {
+                            0
+                        };
+                    let other_mask = u8::MAX
+                        << if l == other_slice.len() {
+                            other.trailing_bits()
+                        } else {
+                            0
+                        };
+
+                    let i = l - 1;
+                    let self_last = self_slice[i] & self_mask;
+                    let other_last = other_slice[i] & other_mask;
+
+                    self_last
+                        .cmp(&other_last)
+                        .then_with(|| self_mask.cmp(&other_mask))
+                }),
+        }
     }
 }
 
