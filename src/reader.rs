@@ -7,41 +7,26 @@ use crate::{Error, ErrorKind};
 pub struct Reader<R: Read + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
-    end: u8,
+    one: bool,
     enc: E,
     src: R,
 }
 
 impl<R: Read, E: Encoding> Reader<R, E> {
-    /// Creates a new `Reader<R, E>` expecting data to be terminated by a set bit.
-    pub fn one_terminated(src: R, enc: E) -> Self {
+    /// Creates a new `Reader<R, E>` for the gives source.
+    pub fn new(src: R, enc: E, zero_term: bool) -> Self {
+        let one = !zero_term;
         Self {
-            acc: 1 << 63,
+            acc: (one as u64) << 63,
             len: 0,
-            end: 1,
+            one,
             enc,
             src,
         }
-    }
-
-    /// Creates a new `Reader<R, E>` expecting data to have no terminating bit.
-    pub fn zero_terminated(src: R, enc: E) -> Self {
-        Self {
-            acc: 1 << 63,
-            len: 0,
-            end: 0,
-            enc,
-            src,
-        }
-    }
-
-    /// Reads the next value.
-    pub fn read(&mut self) -> Result<Option<i64>, Error> {
-        self.read_stage().map(|r| r.map(|o| o.0))
     }
 
     /// Reads the next value and provides the corresponding stage.
-    pub fn read_stage(&mut self) -> Result<Option<(i64, &Stage)>, Error> {
+    pub fn read(&mut self) -> Result<Option<(i64, &Stage)>, Error> {
         let prefix = (self.acc >> 56) as u8;
         let stage = self.enc.stage_by_prefix(prefix);
 
@@ -76,7 +61,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
                     self.acc = acc_next << (stage.len() - self.len);
                     self.len = {
                         let left = len - stage.len();
-                        if len < 64 {
+                        if self.one && len < 64 {
                             left.min(63u8.saturating_sub(self.acc.trailing_zeros() as u8))
                         } else {
                             left
@@ -90,7 +75,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
             }
         }
 
-        if self.len == 0 && self.acc == (self.end as u64) << 63 {
+        if self.acc == (self.one as u64) << 63 {
             Ok(None)
         } else {
             Err(Error::new(ErrorKind::InvalidInput))

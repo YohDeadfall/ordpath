@@ -2,10 +2,16 @@
 
 #![deny(missing_docs)]
 
+use std::cmp::Ordering;
+use std::fmt::{self, Debug, Display};
+use std::hash::{Hash, Hasher};
+use std::io::{self, Read, Write};
 use std::iter::FusedIterator;
+use std::ops::Deref;
 use std::str::FromStr;
-use std::{cmp::Ordering, io::Write};
-use std::{fmt, io};
+
+#[cfg(feature = "serde")]
+use std::marker::PhantomData;
 
 #[cfg(feature = "serde")]
 use serde::{
@@ -20,22 +26,409 @@ mod reader;
 mod writer;
 
 use enc::Encoding;
-pub use error::{Error, ErrorKind};
 use raw::RawOrdPath;
+
+pub use error::{Error, ErrorKind};
 pub use reader::Reader;
 pub use writer::Writer;
 
-/// Creates an [`OrdPath`] containing the arguments and with the [`Default`] encoding.
-#[macro_export]
-macro_rules! ordpath {
-    ($($x:expr),*$(,)*) => {
-        <OrdPath>::from_slice(&vec![$($x),*], $crate::enc::Default).unwrap()
-    };
+const USIZE_BYTES: usize = (usize::BITS / 8) as usize;
+
+/// A data type representing an ORDPATH which has a set bit after the data stored in.
+pub type OneTerminatedPath<E = enc::Default, const N: usize = USIZE_BYTES> = OrdPath<E, N, false>;
+
+/// A data type representing an ORDPATH which has no terminator at the end.
+pub type ZeroTerminatedPath<E = enc::Default, const N: usize = USIZE_BYTES> = OrdPath<E, N, true>;
+
+/// A data type representing an ORDPATH is stored as a continuous sequence of bytes.
+pub struct OrdPath<E: Encoding, const N: usize, const Z: bool> {
+    raw: RawOrdPath<N>,
+    enc: E,
 }
 
-struct Counter(usize);
+impl<E: Encoding, const N: usize, const Z: bool> OrdPath<E, N, Z> {
+    #[inline]
+    fn new(len: usize, enc: E) -> Result<Self, Error> {
+        Ok(Self {
+            raw: RawOrdPath::new(len)?,
+            enc,
+        })
+    }
 
-impl Write for Counter {
+    /// Encodes a slice `s` to return a new [OrdPath] with the specified encoding.
+    ///
+    /// # Panics
+    ///
+    /// This function might panic if the given slice contains ordinals that are
+    /// out of the range the provided encoding supports, or the resulting
+    /// ORDPATH exceeds the maximum supported length.
+    ///
+    /// See also [try_from_slice] which will return an [Error] rather than panicking.
+    #[inline]
+    pub fn from_slice(s: &[i64], enc: E) -> Self {
+        Self::try_from_slice(s, enc).unwrap()
+    }
+
+    /// Parses a string `s` to return a new [OrdPath] with the specified encoding.
+    ///
+    /// # Panics
+    ///
+    /// This function might panic if the given string contains any value other
+    /// than numbers separated by dots, or it contains numbers that are out of
+    /// the range the provided encoding supports, or the resulting ORDPATH
+    /// exceeds the maximum supported length.
+    ///
+    /// See also [try_from_str] which will return an [Error] rather than panicking.
+    #[inline]
+    pub fn from_str(s: &str, enc: E) -> Self {
+        Self::try_from_str(s, enc).unwrap()
+    }
+
+    /// Creates an [OrdPath] from a byte slice `s`.
+    ///
+    /// # Panics
+    /// This function might panic if the given slice is not a valid ORDPATH, it
+    /// cannot be read by the provided encoding, or the given slice exceeds the
+    /// maximum supported length.
+    ///
+    /// See also [try_from_bytes] which will return an [Error] rather than panicking.
+    pub fn from_bytes(s: &[u8], enc: E) -> Self {
+        Self::try_from_bytes(s, enc).unwrap()
+    }
+
+    /// Tries to encode a slice of ordinals `s`.
+    pub fn try_from_slice(s: &[i64], enc: E) -> Result<Self, Error> {
+        let mut len = Len(0);
+        let mut writer = Writer::new(&mut len, &enc, Z);
+        for ordinal in s {
+            writer.write(*ordinal)?;
+        }
+
+        drop(writer);
+
+        let mut path = Self::new(len.0, enc)?;
+        let mut writer = Writer::new(path.raw.as_mut_slice(), &path.enc, Z);
+        for ordinal in s {
+            writer.write(*ordinal)?;
+        }
+
+        let bits = writer.trailing_bits();
+
+        drop(writer);
+        path.raw.set_trailing_bits(bits);
+
+        Ok(path)
+    }
+
+    /// Tries to parse a string `s` and create a new [OrdPath].
+    pub fn try_from_str(s: &str, enc: E) -> Result<Self, Error> {
+        let mut v = Vec::new();
+        for x in s.split_terminator('.') {
+            v.push(i64::from_str_radix(x, 10)?);
+        }
+
+        Self::try_from_slice(&v, enc)
+    }
+
+    /// Tries to create an [OrdPath] from a byte slice 's`.
+    pub fn try_from_bytes(s: &[u8], enc: E) -> Result<Self, Error> {
+        let mut bits = 0u8;
+        let mut reader = Reader::new(s, &enc, Z);
+        while let Some((_, stage)) = reader.read()? {
+            bits = bits.wrapping_add(stage.len());
+        }
+
+        let mut path = Self::new(s.len(), enc)?;
+
+        path.raw.as_mut_slice().copy_from_slice(s);
+        path.raw.set_trailing_bits(bits);
+
+        Ok(path)
+    }
+
+    /// Returns a reference to the used encoding.
+    #[inline]
+    pub fn encoding(&self) -> &E {
+        &self.enc
+    }
+
+    /// An iterator over the bytes of an ORDPATH.
+    #[inline]
+    pub fn bytes(&self) -> &[u8] {
+        self.raw.as_slice()
+    }
+
+    /// An iterator over the ordinals of an ORDPATH.
+    #[inline]
+    pub fn ordinals(&self) -> Ordinals<&[u8], &E> {
+        Ordinals {
+            reader: Reader::new(self.bytes(), self.encoding(), Z),
+        }
+    }
+
+    /// Returns `true` if `self` is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.raw.len() == 0
+    }
+
+    /// Returns `true` if `self` is an ancestor of `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ordpath::{enc, ZeroTerminatedPath};
+    /// let a = <ZeroTerminatedPath>::from_slice(&[1, 2], enc::Default);
+    /// let d = <ZeroTerminatedPath>::from_slice(&[1, 2, 3], enc::Default);
+    /// assert!(a.is_ancestor_of(&d));
+    /// ```
+    //
+    /// See also [is_descendant_of].
+    pub fn is_ancestor_of(&self, other: &Self) -> bool {
+        self.encoding().eq(other.encoding()) && self.raw.is_ancestor(&other.raw)
+    }
+
+    /// Returns `true` if `self` is an descendant of `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ordpath::{enc, ZeroTerminatedPath};
+    /// let a = <ZeroTerminatedPath>::from_slice(&[1, 2], enc::Default);
+    /// let d = <ZeroTerminatedPath>::from_slice(&[1, 2, 3], enc::Default);
+    /// assert!(d.is_descendant_of(&a));
+    /// ```
+    ///
+    /// See also [is_ancestor_of].
+    pub fn is_descendant_of(&self, other: &Self) -> bool {
+        other.is_ancestor_of(self)
+    }
+
+    /// Returns the `OrdPath<E>` without its final element, if there is one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ordpath::{enc, ZeroTerminatedPath};
+    /// let path = <ZeroTerminatedPath>::from_slice(&[1, 2], enc::Default);
+    /// let parent = path.parent();
+    /// assert_eq!(parent, Some(<ZeroTerminatedPath>::from_slice(&[1], enc::Default)));
+    /// let grand_parent = parent.and_then(|p| p.parent());
+    /// assert_eq!(grand_parent, Some(<ZeroTerminatedPath>::from_slice(&[], enc::Default)));
+    /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
+    /// assert_eq!(grand_grand_parent, None);
+    /// ```
+    pub fn parent(&self) -> Option<Self>
+    where
+        E: Clone,
+    {
+        let src = self.bytes();
+        if src.is_empty() {
+            return None;
+        }
+
+        let mut bits = 0u8;
+        let mut bytes = 0;
+        let mut reader = Reader::new(src, self.encoding(), Z);
+        unsafe {
+            // SAFETY: Validation of the data happens on creation even for a byte slice.
+            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                let mut prev_len = stage.len();
+                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                    let len = bits + prev_len;
+
+                    prev_len = stage.len();
+                    bytes += len as usize >> 3;
+                    bits = len & 7;
+                }
+
+                if bits > 0 || bytes > 0 {
+                    bits += Z as u8;
+                    bytes += bits.div_ceil(8) as usize;
+                    bits = bits & 7;
+                }
+            }
+        }
+
+        let mut path = Self::new(bytes, self.encoding().clone()).unwrap();
+        let dst = path.raw.as_mut_slice();
+        if dst.len() > 0 {
+            dst.copy_from_slice(&src[..dst.len()]);
+
+            let bits = 8 - bits;
+            let last = &mut dst[dst.len() - 1];
+
+            *last = *last & (u8::MAX << bits) | ((!Z as u8) << (bits - 1));
+            path.raw.set_trailing_bits(bits);
+        }
+
+        Some(path)
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> PartialEq for OrdPath<E, N, Z> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Eq for OrdPath<E, N, Z> {}
+
+impl<E: Encoding, const N: usize, const Z: bool> PartialOrd for OrdPath<E, N, Z> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.encoding()
+            .eq(other.encoding())
+            .then(|| self.bytes().cmp(other.bytes()))
+    }
+}
+
+impl<E: Encoding + Ord, const N: usize, const Z: bool> Ord for OrdPath<E, N, Z> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.encoding().cmp(other.encoding()).then_with(|| {
+            if Z {
+                // No suffix allows simple span comparison.
+                self.bytes().cmp(other.bytes())
+            } else {
+                self.raw.cmp(&other.raw)
+            }
+        })
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Hash for OrdPath<E, N, Z> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(&self);
+    }
+}
+
+impl<E: Encoding + Clone, const N: usize, const Z: bool> Clone for OrdPath<E, N, Z> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            raw: self.raw.clone(),
+            enc: self.enc.clone(),
+        }
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Deref for OrdPath<E, N, Z> {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.bytes()
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Debug for OrdPath<E, N, Z> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as Display>::fmt(self, f)
+    }
+}
+
+impl<E: Encoding, const N: usize, const Z: bool> Display for OrdPath<E, N, Z> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut ordinals = self.ordinals();
+        if let Some(value) = ordinals.next() {
+            write!(f, "{}", value)?;
+            while let Some(value) = ordinals.next() {
+                write!(f, ".{}", value)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a, E: Encoding, const N: usize, const Z: bool> IntoIterator for &'a OrdPath<E, N, Z> {
+    type Item = i64;
+    type IntoIter = Ordinals<&'a [u8], &'a E>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ordinals()
+    }
+}
+
+impl<E: Encoding + Default, const N: usize, const Z: bool> FromStr for OrdPath<E, N, Z> {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_str(s, Default::default())
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<E: Encoding, const N: usize, const Z: bool> Serialize for OrdPath<E, N, Z> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.bytes().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<'de, E: Encoding + Default, const N: usize, const Z: bool> Deserialize<'de>
+    for OrdPath<E, N, Z>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(OrdPathVisitor::<E, N, Z> {
+            marker: PhantomData,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+struct OrdPathVisitor<Enc, const N: usize, const Z: bool> {
+    marker: PhantomData<Enc>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de, Enc: Encoding + Default, const N: usize, const Z: bool> Visitor<'de>
+    for OrdPathVisitor<Enc, N, Z>
+{
+    type Value = OrdPath<Enc, N, Z>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("bytes")
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+        Self::Value::try_from_bytes(v, Default::default()).map_err(E::custom)
+    }
+}
+
+/// An iterator over the ordinals of an ORDPATH.
+///
+/// This struct is created by the [`ordinals`] method on [`OrdPath`].
+/// See its documentation for more.
+///
+/// ['ordinals']: OrdPath::ordinals
+pub struct Ordinals<R: Read, E: Encoding> {
+    reader: Reader<R, E>,
+}
+
+impl<R: Read, E: Encoding> Iterator for Ordinals<R, E> {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.reader.read().unwrap().map(|x| x.0)
+    }
+}
+
+impl<R: Read, E: Encoding> FusedIterator for Ordinals<R, E> {}
+
+struct Len(usize);
+
+impl Write for Len {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0 = self
             .0
@@ -50,535 +443,231 @@ impl Write for Counter {
     }
 }
 
-const USIZE_BYTES: usize = (usize::BITS / 8) as usize;
-
-/// A compressed binary container of hierarchy labels represented by `i64` values.
-pub struct OrdPath<E: Encoding = enc::Default, const N: usize = USIZE_BYTES> {
-    enc: E,
-    raw: RawOrdPath<N>,
-}
-
-impl<E: Encoding, const N: usize> OrdPath<E, N> {
-    /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
-    pub fn from_str(s: &str, enc: E) -> Result<Self, Error> {
-        let mut v = Vec::new();
-        for x in s.split_terminator('.') {
-            v.push(i64::from_str_radix(x, 10)?);
-        }
-        Self::from_slice(&v, enc)
-    }
-
-    /// Creates a new `OrdPath` containing elements of the slice with the specified encoding.
-    pub fn from_slice(s: &[i64], enc: E) -> Result<Self, Error> {
-        let mut len = Counter(0);
-        let mut writer = Writer::one_terminated(len.by_ref(), &enc);
-
-        for value in s {
-            writer.write(*value)?;
-        }
-
-        drop(writer);
-
-        let mut raw = RawOrdPath::new(len.0)?;
-        let mut writer = Writer::one_terminated(raw.as_mut_slice(), &enc);
-
-        for value in s {
-            writer.write(*value)?;
-        }
-
-        drop(writer);
-
-        Ok(OrdPath { enc, raw })
-    }
-
-    /// Returns `true` if `self` has a length of zero bytes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate ordpath;
-    /// # use ordpath::OrdPath;
-    /// let p = ordpath![1, 2, 3];
-    /// assert!(!p.is_empty());
-    /// ```
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns `true` if `self` is an ancestor of `other`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate ordpath;
-    /// # use ordpath::OrdPath;
-    /// let a = ordpath![1, 2];
-    /// let d = ordpath![1, 2, 3];
-    /// assert!(a.is_ancestor_of(&d));
-    /// ```
-    pub fn is_ancestor_of(&self, other: &Self) -> bool {
-        let self_len = self.len();
-        let other_len = other.len();
-
-        if self_len > 0 && self_len <= other_len {
-            unsafe {
-                let self_slice = std::slice::from_raw_parts(self.as_ptr(), self_len - 1);
-                let other_slice = std::slice::from_raw_parts(other.as_ptr(), self_len - 1);
-
-                if self_slice.eq(other_slice) {
-                    let self_last = self.as_ptr().add(self_len - 1).read();
-                    let self_last_len = self_last.trailing_zeros() + 1;
-
-                    let other_last = other.as_ptr().add(self_len - 1).read();
-                    let other_last_len = other_last.trailing_zeros() + 1;
-
-                    return self_last_len > other_last_len
-                        && (self_last >> self_last_len) == (other_last >> self_last_len);
-                }
-            }
-        }
-
-        self_len == 0 && other_len != 0
-    }
-
-    /// Returns `true` if `self` is a descendant of `other`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate ordpath;
-    /// # use ordpath::OrdPath;
-    /// let a = ordpath![1, 2];
-    /// let d = ordpath![1, 2, 3];
-    /// assert!(d.is_descendant_of(&a));
-    /// ```
-    pub fn is_descendant_of(&self, other: &Self) -> bool {
-        other.is_ancestor_of(self)
-    }
-
-    /// Returns a reference to the used encoding.
-    pub fn encoding(&self) -> &E {
-        &self.enc
-    }
-
-    /// Returns the number of bytes used.
-    pub fn len(&self) -> usize {
-        self.raw.len()
-    }
-
-    fn as_ptr(&self) -> *const u8 {
-        self.raw.as_ptr()
-    }
-
-    /// Extracts a slice containing the encoded values.
-    pub fn as_slice(&self) -> &[u8] {
-        self.raw.as_slice()
-    }
-
-    /// Returns an iterator over the encoded values.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate ordpath;
-    /// # use ordpath::OrdPath;
-    /// let path = ordpath![1, 2, 3, 4];
-    ///
-    /// // Print 1, 2, 3, 4
-    /// for x in path.iter() {
-    ///     println!("{x}");
-    /// }
-    /// ```
-    pub fn iter(&self) -> Iter<'_, E> {
-        Iter {
-            reader: Reader::one_terminated(self.as_slice(), self.encoding()),
-        }
-    }
-}
-
-impl<E: Encoding + Clone, const N: usize> OrdPath<E, N> {
-    /// Returns the `OrdPath<E>` without its final element, if there is one.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate ordpath;
-    /// # use ordpath::OrdPath;
-    /// let path = ordpath![1, 2];
-    /// let parent = path.parent();
-    /// assert_eq!(parent, Some(ordpath![1]));
-    /// let grand_parent = parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_parent, Some(ordpath![]));
-    /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_grand_parent, None);
-    /// ```
-    pub fn parent(&self) -> Option<Self> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut stages = Reader::one_terminated(self.as_slice(), &self.enc);
-        let mut consumed_bytes = 0usize;
-        let mut consumed_bits = 0u8;
-        if let Ok(Some((_, stage))) = stages.read_stage() {
-            let mut prev_len = stage.len();
-            while let Ok(Some((_, stage))) = stages.read_stage() {
-                let bits = consumed_bits + prev_len;
-
-                consumed_bytes += bits as usize / 8;
-                consumed_bits = bits & 7;
-                prev_len = stage.len();
-            }
-        }
-
-        let len = if consumed_bytes > 0 || consumed_bits > 0 {
-            consumed_bytes + (consumed_bits + 1).div_ceil(8) as usize
-        } else {
-            0
-        };
-
-        unsafe {
-            // SAFETY: The resulting path is shorter that self.
-            let mut raw = RawOrdPath::<N>::new(len).unwrap_unchecked();
-
-            if len > 0 {
-                let ptr = raw.as_mut_ptr();
-                ptr.copy_from_nonoverlapping(self.raw.as_ptr(), len);
-                let ptr = ptr.add(len - 1);
-                ptr.write(ptr.read() & (255 << ((8 - consumed_bits) & 7)) | (128 >> consumed_bits));
-            }
-
-            Some(Self {
-                enc: self.enc.clone(),
-                raw,
-            })
-        }
-    }
-}
-
-unsafe impl<E: Encoding + Send, const N: usize> Send for OrdPath<E, N> {}
-unsafe impl<E: Encoding + Sync, const N: usize> Sync for OrdPath<E, N> {}
-
-impl<const N: usize> FromStr for OrdPath<enc::Default, N> {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_str(s, enc::Default)
-    }
-}
-
-impl<E: Encoding + Clone, const N: usize> Clone for OrdPath<E, N> {
-    fn clone(&self) -> Self {
-        Self {
-            enc: self.enc.clone(),
-            raw: self.raw.clone(),
-        }
-    }
-}
-
-impl<E: Encoding, const N: usize> PartialEq for OrdPath<E, N> {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other).is_eq()
-    }
-}
-
-impl<E: Encoding, const N: usize> Eq for OrdPath<E, N> {}
-
-impl<E: Encoding, const N: usize> PartialOrd for OrdPath<E, N> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<E: Encoding, const N: usize> Ord for OrdPath<E, N> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let lhs = self.as_slice();
-        let rhs = other.as_slice();
-        let len = lhs.len().min(rhs.len());
-
-        if len == 0 {
-            lhs.len().cmp(&rhs.len())
-        } else {
-            let len = len - 1;
-
-            lhs[..len].cmp(&rhs[..len]).then_with(|| {
-                fn get_at(s: &[u8], index: usize) -> u8 {
-                    let item = s[index];
-                    if s.len() == index + 1 {
-                        let tail = item.trailing_zeros() + 1;
-                        let mask = 255 << (tail & 7);
-
-                        item & mask
-                    } else {
-                        item
-                    }
-                }
-
-                let lhs = get_at(lhs, len);
-                let rhs = get_at(rhs, len);
-
-                lhs.cmp(&rhs)
-            })
-        }
-    }
-}
-
-impl<E: Encoding, const N: usize> fmt::Debug for OrdPath<E, N> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.into_iter()).finish()
-    }
-}
-
-impl<E: Encoding, const N: usize> fmt::Display for OrdPath<E, N> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        let mut iterator = self.into_iter();
-        if let Some(value) = iterator.next() {
-            write!(f, "{}", value)?;
-            while let Some(value) = iterator.next() {
-                write!(f, ".{}", value)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<'a, E: Encoding, const N: usize> IntoIterator for &'a OrdPath<E, N> {
-    type IntoIter = Iter<'a, E>;
-    type Item = i64;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Iter::<E> {
-            reader: Reader::one_terminated(self.as_slice().into(), &self.enc),
-        }
-    }
-}
-
-/// An iterator that references an `OrdPath` and yields its items by value.
-///
-/// Returned from [`OrdPath::into_iter`].
-pub struct Iter<'a, E: Encoding> {
-    reader: Reader<&'a [u8], &'a E>,
-}
-
-impl<'a, E: Encoding> Iterator for Iter<'a, E> {
-    type Item = i64;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.reader.read().unwrap()
-    }
-}
-
-impl<'a, E: Encoding> FusedIterator for Iter<'a, E> {}
-
-#[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<E: Encoding, const N: usize> Serialize for OrdPath<E, N> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.as_slice().serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<'de> Deserialize<'de> for OrdPath {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_bytes(OrdPathVisitor {})
-    }
-}
-
-#[cfg(feature = "serde")]
-struct OrdPathVisitor;
-
-#[cfg(feature = "serde")]
-impl<'de> Visitor<'de> for OrdPathVisitor {
-    type Value = OrdPath;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("bytes")
-    }
-
-    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
-        let mut raw = RawOrdPath::new(v.len()).map_err(E::custom)?;
-
-        raw.as_mut_slice().copy_from_slice(v);
-
-        Ok(OrdPath {
-            enc: enc::Default,
-            raw,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn path_from_slice() {
-        fn assert_path(s: &[i64]) {
+        fn assert(s: &[i64]) {
             assert_eq!(
-                OrdPath::<enc::Default, USIZE_BYTES>::from_slice(s, enc::Default)
-                    .unwrap()
+                <OneTerminatedPath>::from_slice(s, enc::Default)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                s
+            );
+            assert_eq!(
+                <ZeroTerminatedPath>::from_slice(s, enc::Default)
                     .into_iter()
                     .collect::<Vec<_>>(),
                 s
             );
         }
 
-        assert_path(&[0; 0]);
-        assert_path(&[0]);
-        assert_path(&[0, 8]);
-        assert_path(&[4440, 4440, 4440, 8]);
-        assert_path(&[4440, 4440, 4440, 8, 0]);
-        assert_path(&[4440, 4440, 4440, 4440]);
-        assert_path(&[4440, 4440, 4440, 4440, 88]);
-        assert_path(&[4295037272, 4295037272]);
-        assert_path(&[4295037272, 4295037272, 4440, 88]);
-        assert_path(&[4295037272, 4295037272, 4440, 344]);
-        assert_path(&[4295037272, 4295037272, 4440, 4440]);
+        assert(&[0; 0]);
+        assert(&[0]);
+        assert(&[0, 8]);
+        assert(&[4440, 4440, 4440, 8]);
+        assert(&[4440, 4440, 4440, 8, 0]);
+        assert(&[4440, 4440, 4440, 4440]);
+        assert(&[4440, 4440, 4440, 4440, 88]);
+        assert(&[4295037272, 4295037272]);
+        assert(&[4295037272, 4295037272, 4440, 88]);
+        assert(&[4295037272, 4295037272, 4440, 344]);
+        assert(&[4295037272, 4295037272, 4440, 4440]);
 
-        assert_path(&[0 + 3]);
-        assert_path(&[0 + 3, 8 + 5]);
-        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11]);
-        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11, 0 + 3]);
-        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123]);
-        assert_path(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123, 88 + 11]);
-        assert_path(&[4295037272 + 31, 4295037272 + 6793]);
-        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 88 + 11]);
-        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 344 + 71]);
-        assert_path(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 4440 + 123]);
+        assert(&[0 + 3]);
+        assert(&[0 + 3, 8 + 5]);
+        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11]);
+        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11, 0 + 3]);
+        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123]);
+        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123, 88 + 11]);
+        assert(&[4295037272 + 31, 4295037272 + 6793]);
+        assert(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 88 + 11]);
+        assert(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 344 + 71]);
+        assert(&[4295037272 + 31, 4295037272 + 6793, 4440 + 7541, 4440 + 123]);
     }
 
     #[test]
     fn path_from_str() {
-        fn assert_path(s: &str, p: Result<OrdPath, Error>) {
-            assert_eq!(OrdPath::from_str(s, enc::Default), p);
+        fn assert(s: &str, o: &[i64]) {
+            assert_eq!(
+                <OneTerminatedPath>::try_from_str(s, enc::Default),
+                Ok(<OneTerminatedPath>::from_slice(o, enc::Default))
+            );
+            assert_eq!(
+                <ZeroTerminatedPath>::try_from_str(s, enc::Default),
+                Ok(<ZeroTerminatedPath>::from_slice(o, enc::Default))
+            );
         }
 
-        assert_path("", Ok(ordpath![]));
-        assert_path("0", Ok(ordpath![0]));
-        assert_path("1", Ok(ordpath![1]));
-        assert_path("1.2", Ok(ordpath![1, 2]));
-        assert_path("1.a", Err(Error::new(ErrorKind::InvalidInput)));
-        assert_path("1_2", Err(Error::new(ErrorKind::InvalidInput)));
-        assert_path("a", Err(Error::new(ErrorKind::InvalidInput)));
+        fn assert_err(s: &str, e: Error) {
+            assert_eq!(
+                <OneTerminatedPath>::try_from_str(s, enc::Default),
+                Err(e.clone())
+            );
+            assert_eq!(<ZeroTerminatedPath>::try_from_str(s, enc::Default), Err(e));
+        }
+
+        assert("", &[]);
+        assert("0", &[0]);
+        assert("1", &[1]);
+        assert("1.2", &[1, 2]);
+        assert_err("1.a", Error::new(ErrorKind::InvalidInput));
+        assert_err("1_2", Error::new(ErrorKind::InvalidInput));
+        assert_err("a", Error::new(ErrorKind::InvalidInput));
     }
 
     #[test]
     fn path_to_string() {
-        fn assert_path(p: Vec<i64>, s: &str) {
+        fn assert(o: Vec<i64>, s: &str) {
             assert_eq!(
-                OrdPath::<_, USIZE_BYTES>::from_slice(&p, enc::Default)
-                    .unwrap()
-                    .to_string(),
+                <OneTerminatedPath>::from_slice(&o, enc::Default).to_string(),
+                s
+            );
+            assert_eq!(
+                <ZeroTerminatedPath>::from_slice(&o, enc::Default).to_string(),
                 s
             );
         }
 
-        assert_path(vec![], "");
-        assert_path(vec![0], "0");
-        assert_path(vec![1], "1");
-        assert_path(vec![1, 2], "1.2");
+        assert(vec![], "");
+        assert(vec![0], "0");
+        assert(vec![1], "1");
+        assert(vec![1, 2], "1.2");
     }
 
     #[test]
     fn path_clone() {
-        fn assert_path<E: Encoding + Clone>(p: OrdPath<E>) {
+        fn assert(o: &[i64]) {
             assert_eq!(
-                p.into_iter().collect::<Vec<_>>(),
-                p.clone().into_iter().collect::<Vec<_>>()
+                <OneTerminatedPath>::from_slice(&o, enc::Default).clone(),
+                <OneTerminatedPath>::from_slice(&o, enc::Default)
+            );
+            assert_eq!(
+                <ZeroTerminatedPath>::from_slice(&o, enc::Default).clone(),
+                <ZeroTerminatedPath>::from_slice(&o, enc::Default)
             );
         }
 
-        assert_path(ordpath![]);
-        assert_path(ordpath![0]);
-        assert_path(ordpath![1]);
-        assert_path(ordpath![1, 2]);
+        assert(&[]);
+        assert(&[0]);
+        assert(&[1]);
+        assert(&[1, 2]);
     }
 
     #[test]
     fn path_ordering() {
-        fn cmp(lhs: &[i64], rhs: &[i64]) -> Ordering {
-            let lhs = <OrdPath>::from_slice(lhs, enc::Default).unwrap();
-            let rhs = <OrdPath>::from_slice(rhs, enc::Default).unwrap();
-
-            lhs.cmp(&rhs)
+        fn assert(lhs: &[i64], rhs: &[i64], o: Ordering) {
+            assert_eq!(
+                <OneTerminatedPath>::from_slice(lhs, enc::Default)
+                    .cmp(&<OneTerminatedPath>::from_slice(rhs, enc::Default)),
+                o
+            );
+            assert_eq!(
+                <ZeroTerminatedPath>::from_slice(lhs, enc::Default)
+                    .cmp(&<ZeroTerminatedPath>::from_slice(rhs, enc::Default)),
+                o
+            );
         }
 
-        assert_eq!(cmp(&[0; 0], &[0; 0]), Ordering::Equal);
-        assert_eq!(cmp(&[0; 0], &[0]), Ordering::Less);
-        assert_eq!(cmp(&[0], &[0; 0]), Ordering::Greater);
-        assert_eq!(cmp(&[0], &[0]), Ordering::Equal);
-        assert_eq!(cmp(&[0], &[1]), Ordering::Less);
-        assert_eq!(cmp(&[0], &[0, 1]), Ordering::Less);
-        assert_eq!(cmp(&[0], &[69976, 69976]), Ordering::Less);
-        assert_eq!(cmp(&[0], &[4295037272, 4295037272]), Ordering::Less);
-    }
-
-    #[test]
-    fn path_is_empty() {
-        assert_eq!(ordpath![].is_empty(), true);
-        assert_eq!(ordpath![0].is_empty(), false);
+        assert(&[0; 0], &[0; 0], Ordering::Equal);
+        assert(&[0; 0], &[0], Ordering::Less);
+        assert(&[0], &[0; 0], Ordering::Greater);
+        assert(&[0], &[0], Ordering::Equal);
+        assert(&[0], &[1], Ordering::Less);
+        assert(&[0], &[0, 1], Ordering::Less);
+        assert(&[0], &[69976, 69976], Ordering::Less);
+        assert(&[0], &[4295037272, 4295037272], Ordering::Less);
     }
 
     #[test]
     fn path_is_ancestor() {
-        assert!(ordpath![].is_ancestor_of(&ordpath![0]));
-        assert!(ordpath![0].is_ancestor_of(&ordpath![0, 1]));
-        assert!(ordpath![0, 1].is_ancestor_of(&ordpath![0, 1, 2, 3]));
-        assert!(
-            ordpath![4295037272, 4295037272].is_ancestor_of(&ordpath![4295037272, 4295037272, 1])
+        fn assert(e: bool, a: &[i64], d: &[i64]) {
+            let x = <OneTerminatedPath>::from_slice(&a, enc::Default);
+            let y = <OneTerminatedPath>::from_slice(&d, enc::Default);
+
+            assert_eq!(e, x.is_ancestor_of(&y));
+            assert_eq!(e, y.is_descendant_of(&x));
+
+            let x = <ZeroTerminatedPath>::from_slice(&a, enc::Default);
+            let y = <ZeroTerminatedPath>::from_slice(&d, enc::Default);
+
+            assert_eq!(e, x.is_ancestor_of(&y));
+            assert_eq!(e, y.is_descendant_of(&x));
+        }
+
+        assert(true, &[], &[0]);
+        assert(true, &[0], &[0, 1]);
+        assert(true, &[0, 1], &[0, 1, 2, 3]);
+        assert(
+            true,
+            &[4295037272, 4295037272],
+            &[4295037272, 4295037272, 1],
         );
 
-        assert!(!ordpath![].is_ancestor_of(&ordpath![]));
-        assert!(!ordpath![0].is_ancestor_of(&ordpath![]));
-        assert!(!ordpath![0].is_ancestor_of(&ordpath![0]));
-        assert!(!ordpath![0].is_ancestor_of(&ordpath![1]));
-        assert!(!ordpath![0, 1].is_ancestor_of(&ordpath![0]));
-        assert!(!ordpath![0, 1, 2, 3].is_ancestor_of(&ordpath![0, 1]));
-        assert!(
-            !ordpath![4295037272, 4295037272, 1].is_ancestor_of(&ordpath![4295037272, 4295037272])
+        assert(false, &[0], &[]);
+        assert(false, &[0, 1], &[0]);
+        assert(false, &[0, 1, 2, 3], &[0, 1]);
+        assert(
+            false,
+            &[4295037272, 4295037272, 1],
+            &[4295037272, 4295037272],
         );
+
+        assert(false, &[], &[]);
+        assert(false, &[0], &[0]);
+        assert(false, &[0], &[1]);
     }
 
     #[test]
     fn path_iter_fused() {
-        let path = ordpath![1, 2];
-        let mut iter = path.iter();
+        fn assert<R: Read, E: Encoding>(mut iter: Ordinals<R, E>) {
+            assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), Some(2));
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next(), None);
+        }
 
-        assert_eq!(iter.next(), Some(1));
-        assert_eq!(iter.next(), Some(2));
-        assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
-        assert_eq!(iter.next(), None);
+        assert(<OneTerminatedPath>::from_slice(&[1, 2], enc::Default).ordinals());
+        assert(<ZeroTerminatedPath>::from_slice(&[1, 2], enc::Default).ordinals());
     }
 
     #[test]
     fn path_parent() {
-        let path = ordpath![1, 2];
-        let parent = path.parent();
-        assert_eq!(parent, Some(ordpath![1]));
-        let grand_parent = parent.and_then(|p| p.parent());
-        assert_eq!(grand_parent, Some(ordpath![]));
-        let grand_grand_parent = grand_parent.and_then(|p| p.parent());
-        assert_eq!(grand_grand_parent, None);
+        fn assert<E: Encoding + Clone, const N: usize, const Z: bool>(p: OrdPath<E, N, Z>) {
+            let parent = p.parent();
+            assert_eq!(
+                parent,
+                Some(OrdPath::<E, N, Z>::from_slice(&[1], p.encoding().clone()))
+            );
+            let grand_parent = parent.and_then(|p| p.parent());
+            assert_eq!(
+                grand_parent,
+                Some(OrdPath::<E, N, Z>::from_slice(&[], p.encoding().clone()))
+            );
+            let grand_grand_parent = grand_parent.and_then(|p| p.parent());
+            assert_eq!(grand_grand_parent, None);
+        }
+
+        assert(<OneTerminatedPath>::from_slice(&[1, 2], enc::Default));
+        assert(<ZeroTerminatedPath>::from_slice(&[1, 2], enc::Default));
     }
 
     #[cfg(feature = "serde")]
     #[test]
     fn path_serialization() {
-        let path = ordpath![0, 1, 2, 3];
+        fn assert<E: Encoding + Default, const N: usize, const Z: bool>(p: OrdPath<E, N, Z>) {
+            let encoded = bincode::serialize(&p).unwrap();
+            let decoded = bincode::deserialize(&encoded).unwrap();
 
-        let encoded = bincode::serialize(&path).unwrap();
-        let decoded = bincode::deserialize(&encoded).unwrap();
+            assert_eq!(p, decoded);
+        }
 
-        assert_eq!(path, decoded);
+        assert(<OneTerminatedPath>::from_slice(&[0, 1, 2, 3], enc::Default));
+        assert(<ZeroTerminatedPath>::from_slice(
+            &[0, 1, 2, 3],
+            enc::Default,
+        ));
     }
 }

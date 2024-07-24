@@ -65,7 +65,7 @@ impl fmt::Debug for Stage {
                 let prefix = self.0.prefix();
                 let prefix_len = self.0.prefix_len() as usize;
 
-                f.write_fmt(format_args!("{prefix:b>0prefix_len$}"))
+                f.write_fmt(format_args!("{prefix:0>prefix_len$b}"))
             }
         }
 
@@ -82,7 +82,7 @@ impl fmt::Debug for Stage {
 
 /// An implementation of `Alloctor` is responsible for providing a [`Stage`]
 /// for the provided value or prefix.
-pub trait Encoding {
+pub trait Encoding: PartialEq + Eq {
     /// Returns a reference to the [`Stage`] corresponding to the prefix.
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage>;
 
@@ -115,7 +115,7 @@ macro_rules! count {
 macro_rules! encoding {
     ($v:vis $t:ident :[$(($prefix:expr, $prefix_len:expr, $value_len:expr)),+]) => {
         #[allow(missing_docs)]
-        #[derive(Copy, Clone, Default)]
+        #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
         $v struct $t;
 
         impl $t {
