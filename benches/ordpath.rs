@@ -4,7 +4,7 @@ use ordpath::{
     OneTerminatedPath, OrdPath, ZeroTerminatedPath,
 };
 
-fn comparison<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+fn comparison<E: Encoding, const N: usize, const T: bool, F: Fn(&[i64]) -> OrdPath<E, N, T>>(
     c: &mut Criterion,
     f: F,
 ) {
@@ -29,7 +29,7 @@ fn comparison_one_term(c: &mut Criterion) {
     comparison(c, |s| <OneTerminatedPath>::from_slice(s, enc::Default));
 }
 
-fn from_slice<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+fn from_slice<E: Encoding, const N: usize, const T: bool, F: Fn(&[i64]) -> OrdPath<E, N, T>>(
     c: &mut Criterion,
     f: F,
 ) {
@@ -52,7 +52,7 @@ fn from_slice_zero_term(c: &mut Criterion) {
     from_slice(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
 }
 
-fn from_str<E: Encoding, const N: usize, const Z: bool, F: Fn(&str) -> OrdPath<E, N, Z>>(
+fn from_str<E: Encoding, const N: usize, const T: bool, F: Fn(&str) -> OrdPath<E, N, T>>(
     c: &mut Criterion,
     f: F,
 ) {
@@ -78,7 +78,7 @@ fn from_str_zero_term(c: &mut Criterion) {
     from_str(c, |s| <ZeroTerminatedPath>::from_str(s, enc::Default));
 }
 
-fn is_ancestor_of<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+fn is_ancestor_of<E: Encoding, const N: usize, const T: bool, F: Fn(&[i64]) -> OrdPath<E, N, T>>(
     c: &mut Criterion,
     f: F,
 ) {
@@ -103,7 +103,7 @@ fn is_ancestor_of_zero_term(c: &mut Criterion) {
     is_ancestor_of(c, |s| <ZeroTerminatedPath>::from_slice(s, enc::Default));
 }
 
-fn iteration<E: Encoding, const N: usize, const Z: bool, F: Fn(&[i64]) -> OrdPath<E, N, Z>>(
+fn iteration<E: Encoding, const N: usize, const T: bool, F: Fn(&[i64]) -> OrdPath<E, N, T>>(
     c: &mut Criterion,
     f: F,
 ) {
