@@ -5,20 +5,20 @@ use crate::{Error, ErrorKind};
 
 /// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
 pub struct Writer<W: Write + ?Sized, E: Encoding> {
+    one: bool,
     acc: u64,
     len: u8,
-    one: bool,
     enc: E,
     dst: W,
 }
 
 impl<W: Write, E: Encoding> Writer<W, E> {
     /// Creates a new `Writer<R, E>`.
-    pub fn new(dst: W, enc: E, zero_term: bool) -> Self {
+    pub fn new(dst: W, enc: E, one_term: bool) -> Self {
         Self {
+            one: one_term,
             acc: 0,
             len: 0,
-            one: !zero_term,
             enc,
             dst,
         }
