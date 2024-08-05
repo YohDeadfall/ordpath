@@ -222,7 +222,6 @@ impl<E: Encoding, const N: usize, const T: bool> OrdPath<E, N, T> {
     where
         E: Clone,
     {
-        println!("{self}");
         let src = self.bytes();
         if src.is_empty() {
             return None;
