@@ -149,8 +149,9 @@ macro_rules! encoding {
                 stages
             };
 
-            const STAGE_LOOKUP: [u8; u8::MAX as usize] = {
-                let mut lookup = [u8::MAX; u8::MAX as usize];
+            const STAGE_LOOKUP_LEN: usize = 1 << u8::BITS as usize;
+            const STAGE_LOOKUP: [u8; Self::STAGE_LOOKUP_LEN] = {
+                let mut lookup = [u8::MAX; Self::STAGE_LOOKUP_LEN];
                 let mut index = 0;
                 while index < Self::STAGES.len() {
                     let stage = &Self::STAGES[index];
@@ -171,10 +172,7 @@ macro_rules! encoding {
 
         impl $crate::enc::Encoding for $t {
             fn stage_by_prefix(&self, prefix: u8) -> Option<&$crate::enc::Stage> {
-                match Self::STAGE_LOOKUP[prefix as usize] {
-                    u8::MAX => None,
-                    index => Some(&Self::STAGES[index as usize])
-                }
+                Self::STAGES.get(Self::STAGE_LOOKUP[prefix as usize] as usize)
             }
 
             fn stage_by_value(&self, value: i64) -> Option<&Stage> {
