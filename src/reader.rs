@@ -5,7 +5,6 @@ use crate::{Error, ErrorKind};
 
 /// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
 pub struct Reader<R: Read + ?Sized, E: Encoding> {
-    one: bool,
     acc: u64,
     len: u8,
     enc: E,
@@ -14,10 +13,9 @@ pub struct Reader<R: Read + ?Sized, E: Encoding> {
 
 impl<R: Read, E: Encoding> Reader<R, E> {
     /// Creates a new `Reader<R, E>` for the gives source.
-    pub fn new(src: R, enc: E, one_term: bool) -> Self {
+    pub fn new(src: R, enc: E) -> Self {
         Self {
-            one: one_term,
-            acc: (one_term as u64) << 63,
+            acc: 0,
             len: 0,
             enc,
             src,
@@ -58,14 +56,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
             if let Some(stage) = self.enc.stage_by_prefix(prefix) {
                 if stage.len() <= len {
                     self.acc = acc_next << (stage.len() - self.len);
-                    self.len = {
-                        let left = len - stage.len();
-                        if self.one && len < 64 {
-                            left.min(63u8.saturating_sub(self.acc.trailing_zeros() as u8))
-                        } else {
-                            left
-                        }
-                    };
+                    self.len = len - stage.len();
 
                     let value = ((acc << stage.prefix_len()) >> (64 - stage.value_len())) as i64
                         + stage.value_low();
@@ -74,7 +65,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
             }
         }
 
-        if self.acc == (self.one as u64) << 63 {
+        if self.acc == 0 {
             Ok(None)
         } else {
             Err(Error::new(ErrorKind::InvalidInput))
