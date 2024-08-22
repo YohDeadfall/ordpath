@@ -1,14 +1,14 @@
 [package]
 name = "ordpath"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
 edition = "2021"
 homepage = "https://github.com/yohdeadfall/ordpath/"
 repository = "https://github.com/yohdeadfall/ordpath/"
-description = "Implementation of ORDPATH encoding"
+description = "Implementation of the ORDPATH hierarchical labeling scheme"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["encoding", "ordering", "hierarchy"]
+keywords = ["encoding", "ordering", "hierarchy", "labeling"]
 categories = ["encoding"]
 exclude = [".github/"]
 
