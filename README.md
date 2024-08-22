@@ -1,6 +1,8 @@
 # ordpath
 
-A hierarchy labeling scheme called ORDPATH.
+ORDPATH is a hierarchical labeling scheme.
+
+The crate provides low and high level APIs for reading, writing an manipulating ORDPATH bitstrings.
 
 ## License
 
