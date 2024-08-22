@@ -3,6 +3,7 @@
 use std::fmt;
 
 /// An encoding stage used for vlue compression.
+#[derive(PartialEq, Eq)]
 pub struct Stage {
     bits: u8,
     prefix: u8,
@@ -165,7 +166,7 @@ macro_rules! encoding {
                 while index < Self::STAGES.len() {
                     let stage = &Self::STAGES[index];
                     let prefix_offset = u8::BITS as u8 - stage.prefix_bits();
-                    let prefix = stage.prefix << prefix_offset;
+                    let prefix = stage.prefix() << prefix_offset;
                     let mut data = 0;
                     while data < 1 << prefix_offset {
                         lookup[(prefix | data) as usize] = index as u8;
@@ -231,6 +232,76 @@ encoding!(pub Default: [
     (0b11110  , 5, 48)]
 );
 
+/// A user defined encoding.
+pub struct UserDefined<S: AsRef<[Stage]>> {
+    stages_lookup: [u8; 256],
+    stages: S,
+}
+
+impl<S: AsRef<[Stage]>> UserDefined<S> {
+    /// Constructs a new user defined encoding with the given stages.
+    pub fn new(stages: S) -> Self {
+        assert!(stages.as_ref().len() <= i8::MAX as usize);
+        let mut enc = UserDefined {
+            stages_lookup: [u8::MAX; 256],
+            stages,
+        };
+
+        for (index, stage) in enc.stages.as_ref().iter().enumerate() {
+            let prefix_offset = u8::BITS as u8 - stage.prefix_bits();
+            let prefix = stage.prefix() << prefix_offset;
+            let mut data = 0;
+            while data < 1 << prefix_offset {
+                enc.stages_lookup[(prefix | data) as usize] = index as u8;
+                data += 1;
+            }
+        }
+
+        enc
+    }
+}
+
+impl<S: AsRef<[Stage]>> Encoding for UserDefined<S> {
+    fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage> {
+        let index = self.stages_lookup[prefix as usize] as usize;
+        let stage = self.stages.as_ref().get(index);
+        dbg!(prefix);
+        dbg!(index);
+        dbg!(self.stages.as_ref());
+
+        stage
+    }
+
+    fn stage_by_value(&self, value: i64) -> Option<&Stage> {
+        let stages = self.stages.as_ref();
+
+        stages
+            .binary_search_by(|stage| {
+                let result = stage.ordinal_low().cmp(&value);
+                if result.is_gt() {
+                    return result;
+                }
+
+                let result = stage.ordinal_high().cmp(&value);
+                if result.is_lt() {
+                    return result;
+                }
+
+                ::std::cmp::Ordering::Equal
+            })
+            .map(|index| &stages[index])
+            .ok()
+    }
+}
+
+impl<S: AsRef<[Stage]>> PartialEq for UserDefined<S> {
+    fn eq(&self, other: &Self) -> bool {
+        self.stages.as_ref().eq(other.stages.as_ref())
+    }
+}
+
+impl<S: AsRef<[Stage]>> Eq for UserDefined<S> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +329,14 @@ mod tests {
                 (0b11110, 4295037272, 281479271747927)
             ]
         );
+    }
+
+    #[test]
+    fn user_defined_encoding() {
+        let actual = UserDefined::new(Default::STAGES);
+        let expected = Default::default();
+        for v in 0..u8::MAX {
+            assert_eq!(actual.stage_by_prefix(v), expected.stage_by_prefix(v));
+        }
     }
 }
