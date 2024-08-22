@@ -80,7 +80,7 @@ impl fmt::Debug for Stage {
     }
 }
 
-/// An implementation of `Alloctor` is responsible for providing a [`Stage`]
+/// An implementation of `Encoding` is responsible for providing a [`Stage`]
 /// for the provided value or prefix.
 pub trait Encoding: PartialEq + Eq {
     /// Returns a reference to the [`Stage`] corresponding to the prefix.
