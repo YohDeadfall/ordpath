@@ -171,11 +171,11 @@ macro_rules! encoding {
         }
 
         impl $crate::enc::Encoding for $t {
-            fn stage_by_prefix(&self, prefix: u8) -> Option<&$crate::enc::Stage> {
+            fn stage_by_prefix(&self, prefix: u8) -> ::std::option::Option<&$crate::enc::Stage> {
                 Self::STAGES.get(Self::STAGE_LOOKUP[prefix as usize] as usize)
             }
 
-            fn stage_by_value(&self, value: i64) -> Option<&Stage> {
+            fn stage_by_value(&self, value: i64) -> ::std::option::Option<&Stage> {
                 Self::STAGES.binary_search_by(|stage|{
                     let result = stage.value_low().cmp(&value);
                     if result.is_gt() {
@@ -193,8 +193,8 @@ macro_rules! encoding {
             }
         }
 
-        impl std::fmt::Debug for $t {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl ::std::fmt::Debug for $t {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.debug_struct(std::stringify!($t)).field("stages", &Self::STAGES).finish()
             }
         }
