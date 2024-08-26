@@ -8,42 +8,31 @@ use std::slice;
 use crate::{Error, ErrorKind};
 
 #[derive(Clone, Copy)]
-struct Metadata<const N: usize>(usize);
+struct Metadata(usize);
 
-impl<const N: usize> Metadata<N> {
-    const INLINE_META_MASK: usize =
-        usize::MAX >> (usize::BITS - u8::BITS * RawOrdPath::<N>::INLINE_META_LEN as u32);
-
-    pub const fn size_for(data: usize) -> usize {
+impl Metadata {
+    pub const fn bytes_for(data: usize) -> usize {
         let len_bits = usize::BITS - data.leading_zeros();
-        let meta_bits = len_bits + 4;
-
-        meta_bits.div_ceil(u8::BITS) as usize
+        len_bits.div_ceil(u8::BITS) as usize
     }
 
-    pub const fn new(len: usize) -> Result<Self, Error> {
+    #[inline]
+    pub const fn new(len: usize, spilled: bool) -> Result<Self, Error> {
         if len < isize::MAX as usize {
-            let heap = len > RawOrdPath::<N>::INLINE_DATA_LEN;
-            let meta = (len << 1) | heap as usize;
-
-            Ok(Self(meta))
+            Ok(Self((len << 1) | spilled as usize))
         } else {
             Err(Error::new(ErrorKind::CapacityOverflow))
         }
     }
 
-    pub const fn on_heap(&self) -> bool {
-        self.0 & 1 == 1
+    #[inline]
+    pub const fn len(&self, mask: usize) -> usize {
+        (self.0 & mask) >> 1
     }
 
-    pub const fn len(&self) -> usize {
-        let meta = if self.on_heap() {
-            self.0
-        } else {
-            self.0 & Self::INLINE_META_MASK
-        };
-
-        meta >> 1
+    #[inline]
+    pub const fn spilled(&self) -> bool {
+        (self.0 & 1) == 1
     }
 }
 
@@ -69,14 +58,14 @@ impl<const N: usize> RawOrdPathData<N> {
 #[repr(C)]
 pub(crate) struct RawOrdPath<const N: usize> {
     #[cfg(target_endian = "little")]
-    meta: Metadata<N>,
+    meta: Metadata,
     data: RawOrdPathData<N>,
     #[cfg(target_endian = "big")]
-    meta: Metadata<N>,
+    meta: Metadata,
 }
 
 impl<const N: usize> RawOrdPath<N> {
-    pub const INLINE_META_LEN: usize = {
+    const INLINE_META_LEN: usize = {
         const fn max(lhs: usize, rhs: usize) -> usize {
             if lhs > rhs {
                 lhs
@@ -86,17 +75,20 @@ impl<const N: usize> RawOrdPath<N> {
         }
 
         let data = max(N, size_of::<NonNull<u8>>());
-        let len = Metadata::<N>::size_for(data);
+        let len = Metadata::bytes_for(data);
 
         let data = size_of::<RawOrdPath<N>>() - len;
-        let len = Metadata::<N>::size_for(data);
+        let len = Metadata::bytes_for(data);
 
         len
     };
 
-    pub const INLINE_DATA_LEN: usize = size_of::<RawOrdPath<N>>() - Self::INLINE_META_LEN;
-    pub const INLINE_DATA_OFFSET: usize = if cfg!(target_endian = "little") {
-        size_of::<Metadata<N>>() - Self::INLINE_META_LEN
+    const INLINE_META_MASK: usize =
+        usize::MAX >> (usize::BITS - u8::BITS * RawOrdPath::<N>::INLINE_META_LEN as u32);
+
+    const INLINE_DATA_LEN: usize = size_of::<RawOrdPath<N>>() - Self::INLINE_META_LEN;
+    const INLINE_DATA_OFFSET: usize = if cfg!(target_endian = "little") {
+        size_of::<Metadata>() - Self::INLINE_META_LEN
     } else {
         0
     };
@@ -106,8 +98,8 @@ impl<const N: usize> RawOrdPath<N> {
             0 => 0,
             l => l + 1,
         };
-        let meta = Metadata::<N>::new(len)?;
-        let data = if meta.on_heap() {
+        let meta = Metadata::new(len, len > Self::INLINE_DATA_LEN)?;
+        let data = if meta.spilled() {
             let layout = Layout::array::<u8>(len).unwrap();
             let ptr = NonNull::new(unsafe { alloc::alloc(layout) }).unwrap();
 
@@ -121,34 +113,34 @@ impl<const N: usize> RawOrdPath<N> {
 
     #[inline]
     pub const fn len(&self) -> usize {
-        self.meta.len().saturating_sub(1)
+        self.meta.len(Self::INLINE_META_MASK).saturating_sub(1)
     }
 
     #[inline]
     pub const fn spilled(&self) -> bool {
-        self.meta.on_heap()
+        self.meta.spilled()
     }
 
     #[inline]
     pub const fn trailing_bits(&self) -> u8 {
-        match self.meta.len() {
+        match self.len() {
             0 => 0,
-            l => unsafe { self.as_ptr().add(l - 1).read() },
+            l => unsafe { self.as_ptr().byte_add(l).read() },
         }
     }
 
     #[inline]
     pub fn set_trailing_bits(&mut self, bits: u8) {
-        match self.meta.len() {
+        match self.len() {
             0 => (),
-            l => unsafe { self.as_mut_ptr().add(l - 1).write(bits) },
+            l => unsafe { self.as_mut_ptr().byte_add(l).write(bits) },
         };
     }
 
     #[inline]
     pub const fn as_ptr(&self) -> *const u8 {
         unsafe {
-            if self.meta.on_heap() {
+            if self.spilled() {
                 self.data.heap.as_ptr()
             } else {
                 // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
@@ -163,7 +155,7 @@ impl<const N: usize> RawOrdPath<N> {
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
         unsafe {
-            if self.meta.on_heap() {
+            if self.spilled() {
                 self.data.heap.as_ptr()
             } else {
                 // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
@@ -273,7 +265,7 @@ impl<const N: usize> Clone for RawOrdPath<N> {
 
 impl<const N: usize> Drop for RawOrdPath<N> {
     fn drop(&mut self) {
-        if self.meta.on_heap() {
+        if self.meta.spilled() {
             unsafe {
                 alloc::dealloc(
                     self.as_mut_ptr(),
