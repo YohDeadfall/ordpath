@@ -86,6 +86,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// maximum supported length.
     ///
     /// See also [try_from_bytes] which will return an [Error] rather than panicking.
+    #[inline]
     pub fn from_bytes(s: &[u8], enc: E) -> Self {
         Self::try_from_bytes(s, enc).unwrap()
     }
@@ -184,6 +185,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// ```
     //
     /// See also [is_descendant_of].
+    #[inline]
     pub fn is_ancestor_of(&self, other: &Self) -> bool {
         self.encoding().eq(other.encoding()) && self.raw.is_ancestor(&other.raw)
     }
@@ -200,6 +202,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// ```
     ///
     /// See also [is_ancestor_of].
+    #[inline]
     pub fn is_descendant_of(&self, other: &Self) -> bool {
         other.is_ancestor_of(self)
     }
@@ -362,6 +365,7 @@ impl<'a, E: Encoding, const N: usize> IntoIterator for &'a OrdPath<E, N> {
     type Item = i64;
     type IntoIter = Ordinals<&'a [u8], &'a E>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.ordinals()
     }
@@ -370,6 +374,7 @@ impl<'a, E: Encoding, const N: usize> IntoIterator for &'a OrdPath<E, N> {
 impl<E: Encoding + Default, const N: usize> FromStr for OrdPath<E, N> {
     type Err = Error;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from_str(s, Default::default())
     }
