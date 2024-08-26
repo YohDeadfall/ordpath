@@ -229,37 +229,9 @@ impl<const N: usize> PartialOrd for RawOrdPath<N> {
 }
 
 impl<const N: usize> Ord for RawOrdPath<N> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        let self_slice = self.as_slice();
-        let other_slice = other.as_slice();
-
-        match self_slice.len().min(other_slice.len()) {
-            0 => self_slice.len().cmp(&other_slice.len()),
-            l => self_slice[..l - 1]
-                .cmp(&other_slice[..l - 1])
-                .then_with(|| {
-                    let self_mask = u8::MAX
-                        << if l == self_slice.len() {
-                            self.trailing_bits()
-                        } else {
-                            0
-                        };
-                    let other_mask = u8::MAX
-                        << if l == other_slice.len() {
-                            other.trailing_bits()
-                        } else {
-                            0
-                        };
-
-                    let i = l - 1;
-                    let self_last = self_slice[i] & self_mask;
-                    let other_last = other_slice[i] & other_mask;
-
-                    self_last
-                        .cmp(&other_last)
-                        .then_with(|| self_mask.cmp(&other_mask))
-                }),
-        }
+        self.as_slice().cmp(other.as_slice())
     }
 }
 
