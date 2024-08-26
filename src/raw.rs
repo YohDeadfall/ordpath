@@ -292,21 +292,10 @@ impl<const N: usize> UpperHex for RawOrdPath<N> {
 
 impl<const N: usize> Clone for RawOrdPath<N> {
     fn clone(&self) -> Self {
-        unsafe {
-            if self.meta.on_heap() {
-                // SAFETY: Safe becuase the clone has the same length.
-                let mut other = Self::new(self.len()).unwrap_unchecked();
-                self.as_ptr()
-                    .copy_to_nonoverlapping(other.as_mut_ptr() as *mut u8, self.len());
-
-                other
-            } else {
-                Self {
-                    meta: self.meta,
-                    data: RawOrdPathData::new_inline(self.data.inline),
-                }
-            }
-        }
+        let mut other = Self::new(self.len()).unwrap();
+        other.as_mut_slice().clone_from_slice(self.as_slice());
+        other.set_trailing_bits(self.trailing_bits());
+        other
     }
 }
 
