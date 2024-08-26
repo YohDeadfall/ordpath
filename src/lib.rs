@@ -166,6 +166,12 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         self.raw.len() == 0
     }
 
+    /// Returns true if the data has spilled into a heap-allocated buffer.
+    #[inline]
+    pub fn spilled(&self) -> bool {
+        self.raw.spilled()
+    }
+
     /// Returns `true` if `self` is an ancestor of `other`.
     ///
     /// # Examples

@@ -125,6 +125,11 @@ impl<const N: usize> RawOrdPath<N> {
     }
 
     #[inline]
+    pub const fn spilled(&self) -> bool {
+        self.meta.on_heap()
+    }
+
+    #[inline]
     pub const fn trailing_bits(&self) -> u8 {
         match self.meta.len() {
             0 => 0,
