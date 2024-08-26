@@ -163,6 +163,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
 
     /// Returns `true` if `self` is empty.
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.raw.len() == 0
     }
