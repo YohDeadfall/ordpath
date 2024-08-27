@@ -239,7 +239,7 @@ impl<const N: usize> Binary for RawOrdPath<N> {
 impl<const N: usize> LowerHex for RawOrdPath<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for b in self.as_slice() {
-            write!(f, "{b:0>8x}")?;
+            write!(f, "{b:0>2x}")?;
         }
         Ok(())
     }
@@ -248,7 +248,7 @@ impl<const N: usize> LowerHex for RawOrdPath<N> {
 impl<const N: usize> UpperHex for RawOrdPath<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for b in self.as_slice() {
-            write!(f, "{b:0>8X}")?;
+            write!(f, "{b:0>2X}")?;
         }
         Ok(())
     }
