@@ -1,6 +1,6 @@
 [package]
 name = "ordpath"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
 edition = "2021"
 homepage = "https://github.com/yohdeadfall/ordpath/"
