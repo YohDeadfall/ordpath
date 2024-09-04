@@ -25,31 +25,37 @@ impl Stage {
     }
 
     /// Returs the prefix identifying the stage.
+    #[inline]
     pub const fn prefix(&self) -> u8 {
         self.prefix
     }
 
     /// Returns the number of bits used to encode the prefix.
+    #[inline]
     pub const fn prefix_bits(&self) -> u8 {
         self.prefix_bits
     }
 
     /// Returns the lowest value which can be encoded by the stage.
+    #[inline]
     pub const fn ordinal_low(&self) -> i64 {
         self.ordinal_low
     }
 
     /// Returns the upper value which can be encoded by the stage.
+    #[inline]
     pub const fn ordinal_high(&self) -> i64 {
         self.ordinal_low + ((1 << self.ordinal_bits) - 1)
     }
 
     /// Returns the number of bits used to encode the value part.
+    #[inline]
     pub const fn ordinal_bits(&self) -> u8 {
         self.ordinal_bits
     }
 
     /// Returns the total number of bits used to encode a value.
+    #[inline]
     pub const fn bits(&self) -> u8 {
         self.prefix_bits() + self.ordinal_bits()
     }
@@ -172,10 +178,12 @@ macro_rules! encoding {
         }
 
         impl $crate::enc::Encoding for $t {
+            #[inline]
             fn stage_by_prefix(&self, prefix: u8) -> ::std::option::Option<&$crate::enc::Stage> {
                 Self::STAGES.get(Self::STAGE_LOOKUP[prefix as usize] as usize)
             }
 
+            #[inline]
             fn stage_by_value(&self, value: i64) -> ::std::option::Option<&Stage> {
                 Self::STAGES.binary_search_by(|stage|{
                     let result = stage.ordinal_low().cmp(&value);
