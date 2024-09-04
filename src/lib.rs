@@ -81,6 +81,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// Creates an [OrdPath] from a byte slice `s`.
     ///
     /// # Panics
+    ///
     /// This function might panic if the given slice is not a valid ORDPATH, it
     /// cannot be read by the provided encoding, or the given slice exceeds the
     /// maximum supported length.
@@ -130,7 +131,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         let mut bits = 0u8;
         let mut reader = Reader::new(s, &enc);
         while let Some((_, stage)) = reader.read()? {
-            bits = bits.wrapping_add(stage.len());
+            bits = bits.wrapping_add(stage.bits());
         }
 
         let mut path = Self::new(s.len(), enc)?;
@@ -237,13 +238,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         unsafe {
             // SAFETY: Validation of the data happens on creation even for a byte slice.
             if let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                let mut prev_len = stage.len();
+                let mut bits_prev = stage.bits();
                 while let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                    let len = bits + prev_len;
+                    let bits_tmp = bits + bits_prev;
 
-                    prev_len = stage.len();
-                    bytes += len as usize >> 3;
-                    bits = len & 7;
+                    bits_prev = stage.bits();
+                    bits = bits_tmp & 7;
+                    bytes += bits_tmp as usize >> 3;
                 }
 
                 if bits > 0 || bytes > 0 {

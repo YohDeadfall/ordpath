@@ -4,23 +4,23 @@ use std::fmt;
 
 /// An encoding stage used for vlue compression.
 pub struct Stage {
-    prefix_len: u8,
+    prefix_bits: u8,
     prefix: u8,
-    value_len: u8,
-    value_low: i64,
+    ordinal_bits: u8,
+    ordinal_low: i64,
 }
 
 impl Stage {
     /// Constructs a stage with the given prefix and value range.
-    pub const fn new(prefix_len: u8, prefix: u8, value_len: u8, value_low: i64) -> Stage {
-        assert!(prefix_len < 8);
-        assert!(value_len < 64);
+    pub const fn new(prefix: u8, prefix_bits: u8, ordinal_bits: u8, ordinal_low: i64) -> Stage {
+        assert!(prefix_bits < 8);
+        assert!(ordinal_bits < 64);
 
         Stage {
-            prefix_len,
+            prefix_bits,
             prefix,
-            value_len,
-            value_low,
+            ordinal_bits,
+            ordinal_low,
         }
     }
 
@@ -30,28 +30,28 @@ impl Stage {
     }
 
     /// Returns the number of bits used to encode the prefix.
-    pub const fn prefix_len(&self) -> u8 {
-        self.prefix_len
+    pub const fn prefix_bits(&self) -> u8 {
+        self.prefix_bits
     }
 
     /// Returns the lowest value which can be encoded by the stage.
-    pub const fn value_low(&self) -> i64 {
-        self.value_low
+    pub const fn ordinal_low(&self) -> i64 {
+        self.ordinal_low
     }
 
     /// Returns the upper value which can be encoded by the stage.
-    pub const fn value_high(&self) -> i64 {
-        self.value_low + ((1 << self.value_len) - 1)
+    pub const fn ordinal_high(&self) -> i64 {
+        self.ordinal_low + ((1 << self.ordinal_bits) - 1)
     }
 
     /// Returns the number of bits used to encode the value part.
-    pub const fn value_len(&self) -> u8 {
-        self.value_len
+    pub const fn ordinal_bits(&self) -> u8 {
+        self.ordinal_bits
     }
 
     /// Returns the total number of bits used to encode a value.
-    pub const fn len(&self) -> u8 {
-        self.prefix_len() + self.value_len()
+    pub const fn bits(&self) -> u8 {
+        self.prefix_bits() + self.ordinal_bits()
     }
 }
 
@@ -63,7 +63,7 @@ impl fmt::Debug for Stage {
         impl<'s> fmt::Debug for Prefix<'s> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let prefix = self.0.prefix();
-                let prefix_len = self.0.prefix_len() as usize;
+                let prefix_len = self.0.prefix_bits() as usize;
 
                 f.write_fmt(format_args!("{prefix:0>prefix_len$b}"))
             }
@@ -73,9 +73,10 @@ impl fmt::Debug for Stage {
 
         f.debug_struct("Stage")
             .field("prefix", &prefix)
-            .field("value_len", &self.value_len())
-            .field("value_low", &self.value_low())
-            .field("value_high", &self.value_high())
+            .field("prefix_bits", &self.prefix_bits())
+            .field("ordinal_bits", &self.ordinal_bits())
+            .field("ordinal_low", &self.ordinal_low())
+            .field("ordinal_high", &self.ordinal_high())
             .finish()
     }
 }
@@ -121,7 +122,7 @@ macro_rules! encoding {
         impl $t {
             const STAGES: [$crate::enc::Stage; count!($($prefix,)*)] = {
                 let mut stages = [
-                    $($crate::enc::Stage::new($prefix_len, $prefix, $value_len, 0)),+
+                    $($crate::enc::Stage::new($prefix, $prefix_len, $value_len, 0)),+
                 ];
 
                 let origin = stages.len() / 2;
@@ -130,20 +131,20 @@ macro_rules! encoding {
                 while index > 0  {
                     index -= 1;
                     stages[index] = $crate::enc::Stage::new(
-                        stages[index].prefix_len(),
                         stages[index].prefix(),
-                        stages[index].value_len(),
-                        stages[index + 1].value_low() - stages[index].value_high() - 1);
+                        stages[index].prefix_bits(),
+                        stages[index].ordinal_bits(),
+                        stages[index + 1].ordinal_low() - stages[index].ordinal_high() - 1);
                 }
 
                 let mut index = origin;
                 while index + 1 < stages.len() {
                     index += 1;
                     stages[index] = $crate::enc::Stage::new(
-                        stages[index].prefix_len(),
                         stages[index].prefix(),
-                        stages[index].value_len(),
-                        stages[index - 1].value_high() + 1);
+                        stages[index].prefix_bits(),
+                        stages[index].ordinal_bits(),
+                        stages[index - 1].ordinal_high() + 1);
                 }
 
                 stages
@@ -155,7 +156,7 @@ macro_rules! encoding {
                 let mut index = 0;
                 while index < Self::STAGES.len() {
                     let stage = &Self::STAGES[index];
-                    let prefix_offset = u8::BITS as u8 - stage.prefix_len();
+                    let prefix_offset = u8::BITS as u8 - stage.prefix_bits();
                     let prefix = stage.prefix << prefix_offset;
                     let mut data = 0;
                     while data < 1 << prefix_offset {
@@ -177,12 +178,12 @@ macro_rules! encoding {
 
             fn stage_by_value(&self, value: i64) -> ::std::option::Option<&Stage> {
                 Self::STAGES.binary_search_by(|stage|{
-                    let result = stage.value_low().cmp(&value);
+                    let result = stage.ordinal_low().cmp(&value);
                     if result.is_gt() {
                         return result;
                     }
 
-                    let result = stage.value_high().cmp(&value);
+                    let result = stage.ordinal_high().cmp(&value);
                     if result.is_lt() {
                         return result;
                     }
@@ -227,7 +228,7 @@ mod tests {
     #[test]
     fn default_encoding() {
         assert_eq!(
-            Default::STAGES.map(|s| (s.prefix(), s.value_low(), s.value_high())),
+            Default::STAGES.map(|s| (s.prefix(), s.ordinal_low(), s.ordinal_high())),
             [
                 (0b0000001, -281479271747928, -4295037273),
                 (0b0000010, -4295037272, -69977),
