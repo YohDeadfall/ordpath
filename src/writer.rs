@@ -29,17 +29,17 @@ impl<W: Write, E: Encoding> Writer<W, E> {
             .stage_by_value(value)
             .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
         let prefix = stage.prefix() as u64;
-        let value = (value - stage.value_low()) as u64;
+        let value = (value - stage.ordinal_low()) as u64;
 
-        let buf = match stage.len() < 64 {
-            true => (prefix << (stage.value_len()) | value) << (64 - stage.len()),
-            false => prefix << (64 - stage.prefix_len()) | (value >> (stage.len() - 64)),
+        let buf = match stage.bits() < 64 {
+            true => (prefix << (stage.ordinal_bits()) | value) << (64 - stage.bits()),
+            false => prefix << (64 - stage.prefix_bits()) | (value >> (stage.bits() - 64)),
         };
 
         let len = self.len & 127;
         self.acc |= buf >> len;
 
-        let len = len + stage.len();
+        let len = len + stage.bits();
         self.len = 128
             | if len < 64 {
                 len
@@ -48,10 +48,10 @@ impl<W: Write, E: Encoding> Writer<W, E> {
 
                 self.len = 0;
                 self.dst.write_all(&self.acc.to_be_bytes())?;
-                self.acc = if stage.len() <= 64 {
-                    buf << (stage.len() - left)
+                self.acc = if stage.bits() <= 64 {
+                    buf << (stage.bits() - left)
                 } else {
-                    value << (stage.len() - left)
+                    value << (stage.bits() - left)
                 };
 
                 left

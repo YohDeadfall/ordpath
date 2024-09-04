@@ -28,13 +28,13 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         let stage = self.enc.stage_by_prefix(prefix);
 
         if let Some(stage) = stage {
-            if stage.len() <= self.len {
-                let value = (self.acc << stage.prefix_len()) >> (64 - stage.value_len());
+            if stage.bits() <= self.len {
+                let value = (self.acc << stage.prefix_bits()) >> (64 - stage.ordinal_bits());
 
-                self.acc <<= stage.len();
-                self.len -= stage.len();
+                self.acc <<= stage.bits();
+                self.len -= stage.bits();
 
-                let value = value as i64 + stage.value_low();
+                let value = value as i64 + stage.ordinal_low();
                 return Ok(Some((value, stage)));
             }
         }
@@ -54,12 +54,13 @@ impl<R: Read, E: Encoding> Reader<R, E> {
             let prefix = (acc >> 56) as u8;
 
             if let Some(stage) = self.enc.stage_by_prefix(prefix) {
-                if stage.len() <= len {
-                    self.acc = acc_next << (stage.len() - self.len);
-                    self.len = len - stage.len();
+                if stage.bits() <= len {
+                    self.acc = acc_next << (stage.bits() - self.len);
+                    self.len = len - stage.bits();
 
-                    let value = ((acc << stage.prefix_len()) >> (64 - stage.value_len())) as i64
-                        + stage.value_low();
+                    let value = ((acc << stage.prefix_bits()) >> (64 - stage.ordinal_bits()))
+                        as i64
+                        + stage.ordinal_low();
                     return Ok(Some((value, stage)));
                 }
             }
