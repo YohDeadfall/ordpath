@@ -4,8 +4,9 @@ use std::fmt;
 
 /// An encoding stage used for vlue compression.
 pub struct Stage {
-    prefix_bits: u8,
+    bits: u8,
     prefix: u8,
+    prefix_bits: u8,
     ordinal_bits: u8,
     ordinal_low: i64,
 }
@@ -17,8 +18,9 @@ impl Stage {
         assert!(ordinal_bits < 64);
 
         Stage {
-            prefix_bits,
+            bits: prefix_bits + ordinal_bits,
             prefix,
+            prefix_bits,
             ordinal_bits,
             ordinal_low,
         }
@@ -57,7 +59,7 @@ impl Stage {
     /// Returns the total number of bits used to encode a value.
     #[inline]
     pub const fn bits(&self) -> u8 {
-        self.prefix_bits() + self.ordinal_bits()
+        self.bits
     }
 }
 
