@@ -8,6 +8,8 @@ use std::num::ParseIntError;
 #[non_exhaustive]
 pub enum ErrorKind {
     /// Error due to the computed capacity exceeding the maximum length of [`OrdPath`].
+    ///
+    /// [`OrdPath`]: crate::OrdPath
     CapacityOverflow,
     /// A parameter was incorrect.
     InvalidInput,
@@ -29,7 +31,7 @@ impl fmt::Display for ErrorKind {
     }
 }
 
-/// The error type for operations on an [`OrdPath`].
+/// The error type for operations on an ORDPATH.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     kind: ErrorKind,
