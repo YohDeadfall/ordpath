@@ -4,8 +4,8 @@ use ordpath::{enc, OrdPath};
 fn comparison(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = <OrdPath>::from_slice(&seq, enc::Default);
-        let y = <OrdPath>::from_slice(&seq, enc::Default);
+        let x = <OrdPath>::from_ordinals(&seq, enc::Default);
+        let y = <OrdPath>::from_ordinals(&seq, enc::Default);
 
         c.bench_function(&format!("ordpath_comparison_{}", len), |b| {
             b.iter(|| {
@@ -21,7 +21,7 @@ fn from_slice(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_slice_{}", len), |b| {
             b.iter(|| {
-                black_box(<OrdPath>::from_slice(&s, enc::Default));
+                black_box(<OrdPath>::from_ordinals(&s, enc::Default));
             })
         });
     }
@@ -45,8 +45,8 @@ fn from_str(c: &mut Criterion) {
 fn is_ancestor_of(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = <OrdPath>::from_slice(&seq, enc::Default);
-        let y = <OrdPath>::from_slice(&seq, enc::Default);
+        let x = <OrdPath>::from_ordinals(&seq, enc::Default);
+        let y = <OrdPath>::from_ordinals(&seq, enc::Default);
 
         c.bench_function(&format!("ordpath_is_ancestor_of_{}", len), |b| {
             b.iter(|| {
@@ -59,7 +59,7 @@ fn is_ancestor_of(c: &mut Criterion) {
 fn iteration(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len).collect::<Vec<_>>();
-        let p = <OrdPath>::from_slice(&s, enc::Default);
+        let p = <OrdPath>::from_ordinals(&s, enc::Default);
 
         c.bench_function(&format!("ordpath_iteration{}", len), |b| {
             b.iter(|| {
