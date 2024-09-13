@@ -3,7 +3,7 @@ use std::io::Read;
 use crate::enc::{Encoding, Stage};
 use crate::{Error, ErrorKind};
 
-/// The `Reader<R, E>` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
+/// The `Reader` struct allows reading ORDPATH encoded values directly from any source implementing [`Read`].
 pub struct Reader<R: Read + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
@@ -12,7 +12,7 @@ pub struct Reader<R: Read + ?Sized, E: Encoding> {
 }
 
 impl<R: Read, E: Encoding> Reader<R, E> {
-    /// Creates a new `Reader<R, E>` for the gives source.
+    /// Creates a new `Reader` for the gives source.
     pub fn new(src: R, enc: E) -> Self {
         Self {
             acc: 0,

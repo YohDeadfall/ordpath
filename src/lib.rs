@@ -49,7 +49,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         })
     }
 
-    /// Encodes a slice `s` to return a new [OrdPath] with the specified encoding.
+    /// Encodes a slice `s` to return a new `OrdPath` with the specified encoding.
     ///
     /// # Panics
     ///
@@ -57,13 +57,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// out of the range the provided encoding supports, or the resulting
     /// ORDPATH exceeds the maximum supported length.
     ///
-    /// See also [try_from_ordinals] which will return an [Error] rather than panicking.
+    /// See also [`OrdPath::try_from_ordinals`] which will return an [`Error`] rather than panicking.
     #[inline]
     pub fn from_ordinals(s: &[i64], enc: E) -> Self {
         Self::try_from_ordinals(s, enc).unwrap()
     }
 
-    /// Parses a string `s` to return a new [OrdPath] with the specified encoding.
+    /// Parses a string `s` to return a new `OrdPath` with the specified encoding.
     ///
     /// # Panics
     ///
@@ -72,13 +72,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// the range the provided encoding supports, or the resulting ORDPATH
     /// exceeds the maximum supported length.
     ///
-    /// See also [try_from_str] which will return an [Error] rather than panicking.
+    /// See also [`OrdPath::try_from_str`] which will return an [`Error`] rather than panicking.
     #[inline]
     pub fn from_str(s: &str, enc: E) -> Self {
         Self::try_from_str(s, enc).unwrap()
     }
 
-    /// Creates an [OrdPath] from a byte slice `s`.
+    /// Creates an `OrdPath` from a byte slice `s`.
     ///
     /// # Panics
     ///
@@ -86,13 +86,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// cannot be read by the provided encoding, or the given slice exceeds the
     /// maximum supported length.
     ///
-    /// See also [try_from_bytes] which will return an [Error] rather than panicking.
+    /// See also [`OrdPath::try_from_bytes`] which will return an [`Error`] rather than panicking.
     #[inline]
     pub fn from_bytes(s: &[u8], enc: E) -> Self {
         Self::try_from_bytes(s, enc).unwrap()
     }
 
-    /// Tries to encode a slice of ordinals `s`.
+    /// Tries to encode a slice of ordinals `s` and ceate a new `OrdPath`.
     pub fn try_from_ordinals(s: &[i64], enc: E) -> Result<Self, Error> {
         let mut len = Len(0);
         let mut writer = Writer::new(&mut len, &enc);
@@ -116,7 +116,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         Ok(path)
     }
 
-    /// Tries to parse a string `s` and create a new [OrdPath].
+    /// Tries to parse a string `s` and create a new `OrdPath`.
     pub fn try_from_str(s: &str, enc: E) -> Result<Self, Error> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
@@ -126,7 +126,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         Self::try_from_ordinals(&v, enc)
     }
 
-    /// Tries to create an [OrdPath] from a byte slice 's`.
+    /// Tries to create an `OrdPath` from a byte slice 's`.
     pub fn try_from_bytes(s: &[u8], enc: E) -> Result<Self, Error> {
         let mut bits = 0u8;
         let mut reader = Reader::new(s, &enc);
@@ -148,13 +148,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         &self.enc
     }
 
-    /// An iterator over the bytes of an ORDPATH.
+    /// An iterator over the bytes of an `OrdPath`.
     #[inline]
     pub fn bytes(&self) -> &[u8] {
         self.raw.as_slice()
     }
 
-    /// An iterator over the ordinals of an ORDPATH.
+    /// An iterator over the ordinals of an `OrdPath`.
     #[inline]
     pub fn ordinals(&self) -> Ordinals<&[u8], &E> {
         Ordinals {
@@ -169,7 +169,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         self.raw.len() == 0
     }
 
-    /// Returns true if the data has spilled into a heap-allocated buffer.
+    /// Returns `true` if the data has spilled into a heap-allocated buffer.
     #[inline]
     pub fn spilled(&self) -> bool {
         self.raw.spilled()
@@ -186,7 +186,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// assert!(a.is_ancestor_of(&d));
     /// ```
     //
-    /// See also [is_descendant_of].
+    /// See also [`OrdPath::is_descendant_of`].
     #[inline]
     pub fn is_ancestor_of(&self, other: &Self) -> bool {
         self.encoding().eq(other.encoding()) && self.raw.is_ancestor(&other.raw)
@@ -203,13 +203,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// assert!(d.is_descendant_of(&a));
     /// ```
     ///
-    /// See also [is_ancestor_of].
+    /// See also [`OrdPath::is_ancestor_of`].
     #[inline]
     pub fn is_descendant_of(&self, other: &Self) -> bool {
         other.is_ancestor_of(self)
     }
 
-    /// Returns the `OrdPath<E>` without its final element, if there is one.
+    /// Returns the `OrdPath` without its final element, if there is one.
     ///
     /// # Examples
     ///
@@ -424,12 +424,12 @@ impl<'de, Enc: Encoding + Default, const N: usize> Visitor<'de> for OrdPathVisit
     }
 }
 
-/// An iterator over the ordinals of an ORDPATH.
+/// An iterator over the ordinals of an [`OrdPath`].
 ///
 /// This struct is created by the [`ordinals`] method on [`OrdPath`].
 /// See its documentation for more.
 ///
-/// ['ordinals']: OrdPath::ordinals
+/// [`ordinals`]: OrdPath::ordinals
 pub struct Ordinals<R: Read, E: Encoding> {
     reader: Reader<R, E>,
 }
