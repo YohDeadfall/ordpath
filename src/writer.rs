@@ -3,7 +3,7 @@ use std::io::Write;
 use crate::enc::Encoding;
 use crate::{Error, ErrorKind};
 
-/// The `Reader` struct allows reading ORDPATH encoded values directly from any source implementing [`Write`].
+/// The `Writer` struct allows reading ORDPATH encoded values directly from any source implementing [`Write`].
 pub struct Writer<W: Write + ?Sized, E: Encoding> {
     acc: u64,
     len: u8,
