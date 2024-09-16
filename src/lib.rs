@@ -19,23 +19,23 @@ use serde::{
     ser::{Serialize, Serializer},
 };
 
-pub mod enc;
+mod enc;
 mod error;
 mod raw;
 mod reader;
 mod writer;
 
-use enc::Encoding;
 use raw::RawOrdPath;
 
-pub use error::{Error, ErrorKind};
-pub use reader::Reader;
-pub use writer::Writer;
+pub use enc::*;
+pub use error::*;
+pub use reader::*;
+pub use writer::*;
 
 const USIZE_BYTES: usize = (usize::BITS / 8) as usize;
 
 /// A data type representing an ORDPATH is stored as a continuous sequence of bytes.
-pub struct OrdPath<E: Encoding = enc::Default, const N: usize = USIZE_BYTES> {
+pub struct OrdPath<E: Encoding = DefaultEncoding, const N: usize = USIZE_BYTES> {
     raw: RawOrdPath<N>,
     enc: E,
 }
@@ -180,9 +180,9 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # Examples
     ///
     /// ```
-    /// # use ordpath::{enc, OrdPath};
-    /// let a = <OrdPath>::from_ordinals(&[1, 2], enc::Default);
-    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], enc::Default);
+    /// # use ordpath::{DefaultEncoding, OrdPath};
+    /// let a = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
+    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], DefaultEncoding);
     /// assert!(a.is_ancestor_of(&d));
     /// ```
     //
@@ -197,9 +197,9 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # Examples
     ///
     /// ```
-    /// # use ordpath::{enc, OrdPath};
-    /// let a = <OrdPath>::from_ordinals(&[1, 2], enc::Default);
-    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], enc::Default);
+    /// # use ordpath::{DefaultEncoding, OrdPath};
+    /// let a = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
+    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], DefaultEncoding);
     /// assert!(d.is_descendant_of(&a));
     /// ```
     ///
@@ -214,12 +214,12 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # Examples
     ///
     /// ```
-    /// # use ordpath::{enc, OrdPath};
-    /// let path = <OrdPath>::from_ordinals(&[1, 2], enc::Default);
+    /// # use ordpath::{DefaultEncoding, OrdPath};
+    /// let path = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
     /// let parent = path.parent();
-    /// assert_eq!(parent, Some(<OrdPath>::from_ordinals(&[1], enc::Default)));
+    /// assert_eq!(parent, Some(<OrdPath>::from_ordinals(&[1], DefaultEncoding)));
     /// let grand_parent = parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_parent, Some(<OrdPath>::from_ordinals(&[], enc::Default)));
+    /// assert_eq!(grand_parent, Some(<OrdPath>::from_ordinals(&[], DefaultEncoding)));
     /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
     /// assert_eq!(grand_grand_parent, None);
     /// ```
@@ -469,7 +469,7 @@ mod tests {
     fn path_from_ordinals() {
         fn assert(s: &[i64]) {
             assert_eq!(
-                <OrdPath>::from_ordinals(s, enc::Default)
+                <OrdPath>::from_ordinals(s, DefaultEncoding)
                     .into_iter()
                     .collect::<Vec<_>>(),
                 s
@@ -504,13 +504,13 @@ mod tests {
     fn path_from_str() {
         fn assert(s: &str, o: &[i64]) {
             assert_eq!(
-                <OrdPath>::try_from_str(s, enc::Default),
-                Ok(<OrdPath>::from_ordinals(o, enc::Default))
+                <OrdPath>::try_from_str(s, DefaultEncoding),
+                Ok(<OrdPath>::from_ordinals(o, DefaultEncoding))
             );
         }
 
         fn assert_err(s: &str, e: Error) {
-            assert_eq!(<OrdPath>::try_from_str(s, enc::Default), Err(e.clone()));
+            assert_eq!(<OrdPath>::try_from_str(s, DefaultEncoding), Err(e.clone()));
         }
 
         assert("", &[]);
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn path_to_string() {
         fn assert(o: Vec<i64>, s: &str) {
-            assert_eq!(<OrdPath>::from_ordinals(&o, enc::Default).to_string(), s);
+            assert_eq!(<OrdPath>::from_ordinals(&o, DefaultEncoding).to_string(), s);
         }
 
         assert(vec![], "");
@@ -538,8 +538,8 @@ mod tests {
     fn path_clone() {
         fn assert(o: &[i64]) {
             assert_eq!(
-                <OrdPath>::from_ordinals(&o, enc::Default).clone(),
-                <OrdPath>::from_ordinals(&o, enc::Default)
+                <OrdPath>::from_ordinals(&o, DefaultEncoding).clone(),
+                <OrdPath>::from_ordinals(&o, DefaultEncoding)
             );
         }
 
@@ -553,8 +553,8 @@ mod tests {
     fn path_ordering() {
         fn assert(lhs: &[i64], rhs: &[i64], o: Ordering) {
             assert_eq!(
-                <OrdPath>::from_ordinals(lhs, enc::Default)
-                    .cmp(&<OrdPath>::from_ordinals(rhs, enc::Default)),
+                <OrdPath>::from_ordinals(lhs, DefaultEncoding)
+                    .cmp(&<OrdPath>::from_ordinals(rhs, DefaultEncoding)),
                 o
             );
         }
@@ -572,8 +572,8 @@ mod tests {
     #[test]
     fn path_is_ancestor() {
         fn assert(e: bool, a: &[i64], d: &[i64]) {
-            let x = <OrdPath>::from_ordinals(&a, enc::Default);
-            let y = <OrdPath>::from_ordinals(&d, enc::Default);
+            let x = <OrdPath>::from_ordinals(&a, DefaultEncoding);
+            let y = <OrdPath>::from_ordinals(&d, DefaultEncoding);
 
             assert_eq!(e, x.is_ancestor_of(&y));
             assert_eq!(e, y.is_descendant_of(&x));
@@ -611,16 +611,16 @@ mod tests {
             assert_eq!(iter.next(), None);
         }
 
-        assert(<OrdPath>::from_ordinals(&[1, 2], enc::Default).ordinals());
+        assert(<OrdPath>::from_ordinals(&[1, 2], DefaultEncoding).ordinals());
     }
 
     #[test]
     fn path_parent() {
         fn assert(s: &[i64]) {
-            let mut p = Some(<OrdPath>::from_ordinals(s, enc::Default));
+            let mut p = Some(<OrdPath>::from_ordinals(s, DefaultEncoding));
             for i in (0..s.len()).rev() {
                 p = p.and_then(|p| p.parent());
-                assert_eq!(p, Some(OrdPath::from_ordinals(&s[..i], enc::Default)));
+                assert_eq!(p, Some(OrdPath::from_ordinals(&s[..i], DefaultEncoding)));
             }
             assert_eq!(p.and_then(|p| p.parent()), None);
         }
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn path_serialization() {
         fn assert(s: &[i64]) {
-            let p = <OrdPath>::from_ordinals(s, enc::Default);
+            let p = <OrdPath>::from_ordinals(s, DefaultEncoding);
             let encoded = bincode::serialize(&p).unwrap();
             let decoded = bincode::deserialize(&encoded).unwrap();
 
