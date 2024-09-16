@@ -213,7 +213,7 @@ macro_rules! encoding {
     };
 }
 
-encoding!(pub Default: [
+encoding!(pub DefaultEncoding: [
     (0b0000001, 7, 48),
     (0b0000010, 7, 32),
     (0b0000011, 7, 16),
@@ -233,16 +233,16 @@ encoding!(pub Default: [
 );
 
 /// A user defined encoding.
-pub struct UserDefined<S: AsRef<[Stage]>> {
+pub struct UserDefinedEncoding<S: AsRef<[Stage]>> {
     stages_lookup: [u8; 256],
     stages: S,
 }
 
-impl<S: AsRef<[Stage]>> UserDefined<S> {
+impl<S: AsRef<[Stage]>> UserDefinedEncoding<S> {
     /// Constructs a new user defined encoding with the given stages.
     pub fn new(stages: S) -> Self {
         assert!(stages.as_ref().len() <= i8::MAX as usize);
-        let mut enc = UserDefined {
+        let mut enc = UserDefinedEncoding {
             stages_lookup: [u8::MAX; 256],
             stages,
         };
@@ -261,7 +261,7 @@ impl<S: AsRef<[Stage]>> UserDefined<S> {
     }
 }
 
-impl<S: AsRef<[Stage]>> Encoding for UserDefined<S> {
+impl<S: AsRef<[Stage]>> Encoding for UserDefinedEncoding<S> {
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage> {
         let index = self.stages_lookup[prefix as usize] as usize;
         let stage = self.stages.as_ref().get(index);
@@ -294,13 +294,13 @@ impl<S: AsRef<[Stage]>> Encoding for UserDefined<S> {
     }
 }
 
-impl<S: AsRef<[Stage]>> PartialEq for UserDefined<S> {
+impl<S: AsRef<[Stage]>> PartialEq for UserDefinedEncoding<S> {
     fn eq(&self, other: &Self) -> bool {
         self.stages.as_ref().eq(other.stages.as_ref())
     }
 }
 
-impl<S: AsRef<[Stage]>> Eq for UserDefined<S> {}
+impl<S: AsRef<[Stage]>> Eq for UserDefinedEncoding<S> {}
 
 #[cfg(test)]
 mod tests {
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn default_encoding() {
         assert_eq!(
-            Default::STAGES.map(|s| (s.prefix(), s.ordinal_low(), s.ordinal_high())),
+            DefaultEncoding::STAGES.map(|s| (s.prefix(), s.ordinal_low(), s.ordinal_high())),
             [
                 (0b0000001, -281479271747928, -4295037273),
                 (0b0000010, -4295037272, -69977),
@@ -333,8 +333,8 @@ mod tests {
 
     #[test]
     fn user_defined_encoding() {
-        let actual = UserDefined::new(Default::STAGES);
-        let expected = Default::default();
+        let actual = UserDefinedEncoding::new(DefaultEncoding::STAGES);
+        let expected = DefaultEncoding::default();
         for v in 0..u8::MAX {
             assert_eq!(actual.stage_by_prefix(v), expected.stage_by_prefix(v));
         }
