@@ -188,7 +188,10 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     //
     /// See also [`OrdPath::is_descendant_of`].
     #[inline]
-    pub fn is_ancestor_of(&self, other: &Self) -> bool {
+    pub fn is_ancestor_of(&self, other: &Self) -> bool
+    where
+        E: PartialEq,
+    {
         self.encoding().eq(other.encoding()) && self.raw.is_ancestor(&other.raw)
     }
 
@@ -205,7 +208,10 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     ///
     /// See also [`OrdPath::is_ancestor_of`].
     #[inline]
-    pub fn is_descendant_of(&self, other: &Self) -> bool {
+    pub fn is_descendant_of(&self, other: &Self) -> bool
+    where
+        E: PartialEq,
+    {
         other.is_ancestor_of(self)
     }
 
@@ -270,30 +276,19 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     }
 }
 
-impl<E: Encoding, const N: usize> PartialEq for OrdPath<E, N> {
+impl<E: Encoding + PartialEq, const N: usize> PartialEq for OrdPath<E, N> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
     }
 }
 
-impl<E: Encoding, const N: usize> Eq for OrdPath<E, N> {}
-
-impl<E: Encoding, const N: usize> PartialOrd for OrdPath<E, N> {
+impl<E: Encoding + PartialEq, const N: usize> PartialOrd for OrdPath<E, N> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.encoding()
             .eq(other.encoding())
             .then(|| self.bytes().cmp(other.bytes()))
-    }
-}
-
-impl<E: Encoding + Ord, const N: usize> Ord for OrdPath<E, N> {
-    #[inline]
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.encoding()
-            .cmp(other.encoding())
-            .then_with(|| self.bytes().cmp(other.bytes()))
     }
 }
 

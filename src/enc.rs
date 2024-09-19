@@ -92,7 +92,7 @@ impl fmt::Debug for Stage {
 
 /// An implementation of `Encoding` is responsible for providing a [`Stage`]
 /// for the provided value or prefix.
-pub trait Encoding: PartialEq + Eq {
+pub trait Encoding {
     /// Returns a reference to the [`Stage`] corresponding to the prefix.
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage>;
 
