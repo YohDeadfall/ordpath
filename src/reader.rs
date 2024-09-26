@@ -34,7 +34,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
                 self.acc <<= stage.bits();
                 self.len -= stage.bits();
 
-                let value = value as i64 + stage.ordinal_low();
+                let value = value as i64 + stage.ordinal_min();
                 return Ok(Some((value, stage)));
             }
         }
@@ -60,7 +60,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
 
                     let value = ((acc << stage.prefix_bits()) >> (64 - stage.ordinal_bits()))
                         as i64
-                        + stage.ordinal_low();
+                        + stage.ordinal_min();
                     return Ok(Some((value, stage)));
                 }
             }
