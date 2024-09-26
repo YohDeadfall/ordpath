@@ -9,12 +9,12 @@ pub struct Stage {
     prefix: u8,
     prefix_bits: u8,
     ordinal_bits: u8,
-    ordinal_low: i64,
+    ordinal_min: i64,
 }
 
 impl Stage {
     /// Constructs a stage with the given prefix and value range.
-    pub const fn new(prefix: u8, prefix_bits: u8, ordinal_bits: u8, ordinal_low: i64) -> Stage {
+    pub const fn new(prefix: u8, prefix_bits: u8, ordinal_bits: u8, ordinal_min: i64) -> Stage {
         assert!(prefix_bits < 8);
         assert!(ordinal_bits < 64);
 
@@ -23,7 +23,7 @@ impl Stage {
             prefix,
             prefix_bits,
             ordinal_bits,
-            ordinal_low,
+            ordinal_min,
         }
     }
 
@@ -41,14 +41,14 @@ impl Stage {
 
     /// Returns the lowest value which can be encoded by the stage.
     #[inline]
-    pub const fn ordinal_low(&self) -> i64 {
-        self.ordinal_low
+    pub const fn ordinal_min(&self) -> i64 {
+        self.ordinal_min
     }
 
     /// Returns the upper value which can be encoded by the stage.
     #[inline]
-    pub const fn ordinal_high(&self) -> i64 {
-        self.ordinal_low + ((1 << self.ordinal_bits) - 1)
+    pub const fn ordinal_max(&self) -> i64 {
+        self.ordinal_min + ((1 << self.ordinal_bits) - 1)
     }
 
     /// Returns the number of bits used to encode the value part.
@@ -84,8 +84,8 @@ impl fmt::Debug for Stage {
             .field("prefix", &prefix)
             .field("prefix_bits", &self.prefix_bits())
             .field("ordinal_bits", &self.ordinal_bits())
-            .field("ordinal_low", &self.ordinal_low())
-            .field("ordinal_high", &self.ordinal_high())
+            .field("ordinal_min", &self.ordinal_min())
+            .field("ordinal_max", &self.ordinal_max())
             .finish()
     }
 }
@@ -143,7 +143,7 @@ macro_rules! encoding {
                         stages[index].prefix(),
                         stages[index].prefix_bits(),
                         stages[index].ordinal_bits(),
-                        stages[index + 1].ordinal_low() - stages[index].ordinal_high() - 1);
+                        stages[index + 1].ordinal_min() - stages[index].ordinal_max() - 1);
                 }
 
                 let mut index = origin;
@@ -153,7 +153,7 @@ macro_rules! encoding {
                         stages[index].prefix(),
                         stages[index].prefix_bits(),
                         stages[index].ordinal_bits(),
-                        stages[index - 1].ordinal_high() + 1);
+                        stages[index - 1].ordinal_max() + 1);
                 }
 
                 stages
@@ -189,12 +189,12 @@ macro_rules! encoding {
             #[inline]
             fn stage_by_value(&self, value: i64) -> ::std::option::Option<&Stage> {
                 Self::STAGES.binary_search_by(|stage|{
-                    let result = stage.ordinal_low().cmp(&value);
+                    let result = stage.ordinal_min().cmp(&value);
                     if result.is_gt() {
                         return result;
                     }
 
-                    let result = stage.ordinal_high().cmp(&value);
+                    let result = stage.ordinal_max().cmp(&value);
                     if result.is_lt() {
                         return result;
                     }
@@ -277,12 +277,12 @@ impl<S: AsRef<[Stage]>> Encoding for UserDefinedEncoding<S> {
 
         stages
             .binary_search_by(|stage| {
-                let result = stage.ordinal_low().cmp(&value);
+                let result = stage.ordinal_min().cmp(&value);
                 if result.is_gt() {
                     return result;
                 }
 
-                let result = stage.ordinal_high().cmp(&value);
+                let result = stage.ordinal_max().cmp(&value);
                 if result.is_lt() {
                     return result;
                 }
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn default_encoding() {
         assert_eq!(
-            DefaultEncoding::STAGES.map(|s| (s.prefix(), s.ordinal_low(), s.ordinal_high())),
+            DefaultEncoding::STAGES.map(|s| (s.prefix(), s.ordinal_min(), s.ordinal_max())),
             [
                 (0b0000001, -281479271747928, -4295037273),
                 (0b0000010, -4295037272, -69977),

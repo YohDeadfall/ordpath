@@ -29,7 +29,7 @@ impl<W: Write, E: Encoding> Writer<W, E> {
             .stage_by_value(value)
             .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
         let prefix = stage.prefix() as u64;
-        let value = (value - stage.ordinal_low()) as u64;
+        let value = (value - stage.ordinal_min()) as u64;
 
         let buf = match stage.bits() < 64 {
             true => (prefix << (stage.ordinal_bits()) | value) << (64 - stage.bits()),
