@@ -123,7 +123,7 @@ macro_rules! count {
 /// Defines a new encoding with the specified stages.
 #[macro_export]
 macro_rules! encoding {
-    ($v:vis $t:ident :[$(($prefix:expr, $prefix_len:expr, $value_len:expr)),+]) => {
+    ($v:vis $t:ident :[$(($prefix:expr, $ordinal_len:expr)),+]) => {
         #[allow(missing_docs)]
         #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
         $v struct $t;
@@ -131,29 +131,56 @@ macro_rules! encoding {
         impl $t {
             const STAGES: [$crate::enc::Stage; count!($($prefix,)*)] = {
                 let mut stages = [
-                    $($crate::enc::Stage::new($prefix, $prefix_len, $value_len, 0)),+
+                    $({
+                        let prefix = $prefix;
+                        let prefix_str = ::std::stringify!($prefix);
+                        // FIXME: Find a compile time alternative displaying messages.
+                        assert!(
+                            prefix_str.is_ascii()
+                                && prefix_str.len() > 2
+                                && prefix_str.as_bytes()[1] == b'b',
+                            "the prefix must be a binary literal"
+                        );
+
+                        $crate::enc::Stage::new(prefix, prefix_str.len() as u8 - 2, $ordinal_len, 0)
+                    }),+
                 ];
 
-                let origin = stages.len() / 2;
+                if stages.len() > 1 {
+                    let origin = {
+                        let mut shortest_prefix_idx = 0;
+                        let mut shortest_prefix_len = stages[0].prefix_bits();
+                        let mut idx = 1;
+                        while idx < stages.len() {
+                            let prefix_len = stages[idx].prefix_bits();
+                            if shortest_prefix_len > prefix_len {
+                                shortest_prefix_len = prefix_len;
+                                shortest_prefix_idx = idx;
+                            }
+                            idx += 1;
+                        }
+                        shortest_prefix_idx
+                    };
 
-                let mut index = origin;
-                while index > 0  {
-                    index -= 1;
-                    stages[index] = $crate::enc::Stage::new(
-                        stages[index].prefix(),
-                        stages[index].prefix_bits(),
-                        stages[index].ordinal_bits(),
-                        stages[index + 1].ordinal_min() - stages[index].ordinal_max() - 1);
-                }
+                    let mut index = origin;
+                    while index > 0  {
+                        index -= 1;
+                        stages[index] = $crate::enc::Stage::new(
+                            stages[index].prefix(),
+                            stages[index].prefix_bits(),
+                            stages[index].ordinal_bits(),
+                            stages[index + 1].ordinal_min() - stages[index].ordinal_max() - 1);
+                    }
 
-                let mut index = origin;
-                while index + 1 < stages.len() {
-                    index += 1;
-                    stages[index] = $crate::enc::Stage::new(
-                        stages[index].prefix(),
-                        stages[index].prefix_bits(),
-                        stages[index].ordinal_bits(),
-                        stages[index - 1].ordinal_max() + 1);
+                    let mut index = origin;
+                    while index + 1 < stages.len() {
+                        index += 1;
+                        stages[index] = $crate::enc::Stage::new(
+                            stages[index].prefix(),
+                            stages[index].prefix_bits(),
+                            stages[index].ordinal_bits(),
+                            stages[index - 1].ordinal_max() + 1);
+                    }
                 }
 
                 stages
@@ -214,22 +241,22 @@ macro_rules! encoding {
 }
 
 encoding!(pub DefaultEncoding: [
-    (0b0000001, 7, 48),
-    (0b0000010, 7, 32),
-    (0b0000011, 7, 16),
-    (0b000010 , 6, 12),
-    (0b000011 , 6, 8 ),
-    (0b00010  , 5, 6 ),
-    (0b00011  , 5, 4 ),
-    (0b001    , 3, 3 ),
-    (0b01     , 2, 3 ),
-    (0b100    , 3, 4 ),
-    (0b101    , 3, 6 ),
-    (0b1100   , 4, 8 ),
-    (0b1101   , 4, 12),
-    (0b11100  , 5, 16),
-    (0b11101  , 5, 32),
-    (0b11110  , 5, 48)]
+    (0b0000001, 48),
+    (0b0000010, 32),
+    (0b0000011, 16),
+    (0b000010 , 12),
+    (0b000011 , 8 ),
+    (0b00010  , 6 ),
+    (0b00011  , 4 ),
+    (0b001    , 3 ),
+    (0b01     , 3 ),
+    (0b100    , 4 ),
+    (0b101    , 6 ),
+    (0b1100   , 8 ),
+    (0b1101   , 12),
+    (0b11100  , 16),
+    (0b11101  , 32),
+    (0b11110  , 48)]
 );
 
 /// A user defined encoding.
