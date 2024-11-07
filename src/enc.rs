@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn user_defined_encoding() {
         let actual = UserDefinedEncoding::new(DefaultEncoding::STAGES);
-        let expected = DefaultEncoding::default();
+        let expected = DefaultEncoding;
         for v in 0..u8::MAX {
             assert_eq!(actual.stage_by_prefix(v), expected.stage_by_prefix(v));
         }

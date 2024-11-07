@@ -78,9 +78,8 @@ impl<const N: usize> RawOrdPath<N> {
         let len = Metadata::bytes_for(data);
 
         let data = size_of::<RawOrdPath<N>>() - len;
-        let len = Metadata::bytes_for(data);
 
-        len
+        Metadata::bytes_for(data)
     };
 
     const INLINE_META_MASK: usize =
@@ -181,7 +180,7 @@ impl<const N: usize> RawOrdPath<N> {
         let self_slice = self.as_slice();
         let other_slice = other.as_slice();
 
-        if self_slice.len() > 0 && self_slice.len() <= other_slice.len() {
+        if !self_slice.is_empty() && self_slice.len() <= other_slice.len() {
             let len = self_slice.len() - 1;
 
             if self_slice[..len].eq(&other_slice[..len]) {
@@ -200,7 +199,7 @@ impl<const N: usize> RawOrdPath<N> {
             }
         }
 
-        self_slice.len() == 0 && other_slice.len() != 0
+        self_slice.is_empty() && !other_slice.is_empty()
     }
 }
 

@@ -120,7 +120,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     pub fn try_from_str(s: &str, enc: E) -> Result<Self, Error> {
         let mut v = Vec::new();
         for x in s.split_terminator('.') {
-            v.push(i64::from_str_radix(x, 10)?);
+            v.push(x.parse::<i64>()?);
         }
 
         Self::try_from_ordinals(&v, enc)
@@ -255,20 +255,20 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
 
                 if bits > 0 || bytes > 0 {
                     bytes += bits.div_ceil(8) as usize;
-                    bits = bits & 7;
+                    bits &= 7;
                 }
             }
         }
 
         let mut path = Self::new(bytes, self.encoding().clone()).unwrap();
         let dst = path.raw.as_mut_slice();
-        if dst.len() > 0 {
+        if !dst.is_empty() {
             dst.copy_from_slice(&src[..dst.len()]);
 
             let bits = (8 - bits) & 7;
             let last = &mut dst[dst.len() - 1];
 
-            *last = *last & (u8::MAX << bits);
+            *last &= u8::MAX << bits;
             path.raw.set_trailing_bits(bits);
         }
 
@@ -295,7 +295,7 @@ impl<E: Encoding + PartialEq, const N: usize> PartialOrd for OrdPath<E, N> {
 impl<E: Encoding, const N: usize> Hash for OrdPath<E, N> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&self);
+        state.write(self);
     }
 }
 
@@ -329,7 +329,7 @@ impl<E: Encoding, const N: usize> Display for OrdPath<E, N> {
         let mut ordinals = self.ordinals();
         if let Some(value) = ordinals.next() {
             write!(f, "{}", value)?;
-            while let Some(value) = ordinals.next() {
+            for value in ordinals {
                 write!(f, ".{}", value)?;
             }
         }
@@ -483,10 +483,10 @@ mod tests {
         assert(&[4295037272, 4295037272, 4440, 344]);
         assert(&[4295037272, 4295037272, 4440, 4440]);
 
-        assert(&[0 + 3]);
-        assert(&[0 + 3, 8 + 5]);
+        assert(&[3]);
+        assert(&[3, 8 + 5]);
         assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11]);
-        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11, 0 + 3]);
+        assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 8 + 11, 3]);
         assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123]);
         assert(&[4440 + 13, 4440 + 179, 4440 + 7541, 4440 + 123, 88 + 11]);
         assert(&[4295037272 + 31, 4295037272 + 6793]);
@@ -533,8 +533,8 @@ mod tests {
     fn path_clone() {
         fn assert(o: &[i64]) {
             assert_eq!(
-                <OrdPath>::from_ordinals(&o, DefaultEncoding).clone(),
-                <OrdPath>::from_ordinals(&o, DefaultEncoding)
+                <OrdPath>::from_ordinals(o, DefaultEncoding).clone(),
+                <OrdPath>::from_ordinals(o, DefaultEncoding)
             );
         }
 
@@ -567,8 +567,8 @@ mod tests {
     #[test]
     fn path_is_ancestor() {
         fn assert(e: bool, a: &[i64], d: &[i64]) {
-            let x = <OrdPath>::from_ordinals(&a, DefaultEncoding);
-            let y = <OrdPath>::from_ordinals(&d, DefaultEncoding);
+            let x = <OrdPath>::from_ordinals(a, DefaultEncoding);
+            let y = <OrdPath>::from_ordinals(d, DefaultEncoding);
 
             assert_eq!(e, x.is_ancestor_of(&y));
             assert_eq!(e, y.is_descendant_of(&x));
