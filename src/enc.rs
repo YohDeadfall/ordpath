@@ -123,11 +123,7 @@ macro_rules! count {
 /// Defines a new encoding with the specified stages.
 #[macro_export]
 macro_rules! encoding {
-    ($v:vis $t:ident :[$(($prefix:expr, $ordinal_len:expr)),+]) => {
-        #[allow(missing_docs)]
-        #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
-        $v struct $t;
-
+    ($t:ident :[$(($prefix:literal, $ordinal_len:expr)),+]) => {
         impl $t {
             const STAGES: [$crate::enc::Stage; count!($($prefix,)*)] = {
                 let mut stages = [
@@ -240,7 +236,11 @@ macro_rules! encoding {
     };
 }
 
-encoding!(pub DefaultEncoding: [
+#[allow(missing_docs)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DefaultEncoding;
+
+encoding!(DefaultEncoding: [
     (0b0000001, 48),
     (0b0000010, 32),
     (0b0000011, 16),
