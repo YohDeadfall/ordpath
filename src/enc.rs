@@ -210,7 +210,7 @@ macro_rules! encoding {
             }
 
             #[inline]
-            fn stage_by_value(&self, value: i64) -> ::std::option::Option<&Stage> {
+            fn stage_by_value(&self, value: i64) -> ::std::option::Option<&$crate::enc::Stage> {
                 Self::STAGES.binary_search_by(|stage|{
                     let result = stage.ordinal_min().cmp(&value);
                     if result.is_gt() {
