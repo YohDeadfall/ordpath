@@ -292,9 +292,6 @@ impl<S: AsRef<[Stage]>> Encoding for UserDefinedEncoding<S> {
     fn stage_by_prefix(&self, prefix: u8) -> Option<&Stage> {
         let index = self.stages_lookup[prefix as usize] as usize;
         let stage = self.stages.as_ref().get(index);
-        dbg!(prefix);
-        dbg!(index);
-        dbg!(self.stages.as_ref());
 
         stage
     }

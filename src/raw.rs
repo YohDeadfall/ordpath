@@ -1,6 +1,7 @@
 use std::alloc::{self, Layout};
 use std::cmp::Ordering;
 use std::fmt::{Binary, LowerHex, UpperHex};
+use std::io::{Read, Write};
 use std::mem::{align_of, size_of, MaybeUninit};
 use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::slice;
@@ -271,6 +272,158 @@ impl<const N: usize> Drop for RawOrdPath<N> {
                     Layout::from_size_align_unchecked(self.len(), align_of::<u8>()),
                 );
             }
+        }
+    }
+}
+
+pub(crate) struct RawOrdPathSlice<'a> {
+    data: &'a [u8],
+    head: u8,
+    tail: u8,
+}
+
+impl<'a> RawOrdPathSlice<'a> {
+    pub fn new(data: &'a [u8], head: u8, tail: u8) -> Self {
+        Self { data, head, tail }
+    }
+
+    pub fn take(&self, bytes: usize, tail: u8) -> Self {
+        Self {
+            data: &self.data[..bytes],
+            head: self.head,
+            tail,
+        }
+    }
+
+    pub fn bytes(&self) -> Bytes<'a> {
+        Bytes {
+            data: self.data,
+            head: self.head,
+            tail: self.tail,
+        }
+    }
+}
+
+impl<'a> PartialEq for RawOrdPathSlice<'a> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<'a> Eq for RawOrdPathSlice<'a> {}
+
+impl<'a> PartialOrd for RawOrdPathSlice<'a> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for RawOrdPathSlice<'a> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.bytes().cmp(other.bytes())
+    }
+}
+
+impl<'a> Binary for RawOrdPathSlice<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.bytes() {
+            write!(f, "{b:0>8b}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> LowerHex for RawOrdPathSlice<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.bytes() {
+            write!(f, "{b:0>2x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> UpperHex for RawOrdPathSlice<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for b in self.bytes() {
+            write!(f, "{b:0>2X}")?;
+        }
+        Ok(())
+    }
+}
+
+/// An iterator over the bytes of an `OrdPath` slice.
+pub struct Bytes<'a> {
+    data: &'a [u8],
+    head: u8,
+    tail: u8,
+}
+
+impl Bytes<'_> {
+    /// Returns the length of this `Bytes`.
+    pub fn len(&self) -> usize {
+        self.data.len() - (self.head as usize + self.tail as usize).div_euclid(8)
+    }
+
+    /// Returns `true` if this `Bytes` has a length of zero, and `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl Read for Bytes<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut dst = buf;
+        let mut res = 0;
+
+        loop {
+            let mut tmp = [0; size_of::<usize>()];
+
+            let len = dst.len().min(tmp.len());
+            let len = self.data.read(&mut tmp[..len])?;
+
+            if len == 0 {
+                break;
+            }
+
+            let acc = {
+                let acc = usize::from_be_bytes(tmp) << self.head;
+                let acc = match self.head {
+                    0 => acc,
+                    h => {
+                        self.data.read_exact(&mut tmp[..1])?;
+                        acc | (tmp[0] as usize >> (8 - h))
+                    }
+                };
+
+                if self.data.is_empty() {
+                    let used = len as u8 * 8 - self.tail;
+                    let mask = usize::MAX << (64 - used);
+                    acc & mask
+                } else {
+                    acc
+                }
+            };
+
+            dst.write_all(&acc.to_be_bytes()[..len])?;
+            res += len;
+        }
+
+        Ok(res)
+    }
+}
+
+impl Iterator for Bytes<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = [0; 1];
+        if self.read_exact(&mut buf).is_ok() {
+            Some(buf[0])
+        } else {
+            None
         }
     }
 }
