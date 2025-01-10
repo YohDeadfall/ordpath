@@ -387,7 +387,7 @@ struct OrdPathVisitor<Enc, const N: usize> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, Enc: Encoding + Default, const N: usize> Visitor<'de> for OrdPathVisitor<Enc, N> {
+impl<Enc: Encoding + Default, const N: usize> Visitor<'_> for OrdPathVisitor<Enc, N> {
     type Value = OrdPath<Enc, N>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -480,14 +480,14 @@ impl<'a, E: Encoding> OrdPathSlice<'a, E> {
     }
 }
 
-impl<'a, E: Encoding + PartialEq> PartialEq for OrdPathSlice<'a, E> {
+impl<E: Encoding + PartialEq> PartialEq for OrdPathSlice<'_, E> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
     }
 }
 
-impl<'a, E: Encoding + PartialEq> PartialOrd for OrdPathSlice<'a, E> {
+impl<E: Encoding + PartialEq> PartialOrd for OrdPathSlice<'_, E> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.encoding()
@@ -496,7 +496,7 @@ impl<'a, E: Encoding + PartialEq> PartialOrd for OrdPathSlice<'a, E> {
     }
 }
 
-impl<'a, E: Encoding> Hash for OrdPathSlice<'a, E> {
+impl<E: Encoding> Hash for OrdPathSlice<'_, E> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for b in self.bytes() {
@@ -505,13 +505,13 @@ impl<'a, E: Encoding> Hash for OrdPathSlice<'a, E> {
     }
 }
 
-impl<'a, E: Encoding> Debug for OrdPathSlice<'a, E> {
+impl<E: Encoding> Debug for OrdPathSlice<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <Self as Display>::fmt(self, f)
     }
 }
 
-impl<'a, E: Encoding> Display for OrdPathSlice<'a, E> {
+impl<E: Encoding> Display for OrdPathSlice<'_, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut ordinals = self.ordinals();
         if let Some(value) = ordinals.next() {
@@ -524,21 +524,21 @@ impl<'a, E: Encoding> Display for OrdPathSlice<'a, E> {
     }
 }
 
-impl<'a, E: Encoding> Binary for OrdPathSlice<'a, E> {
+impl<E: Encoding> Binary for OrdPathSlice<'_, E> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Binary::fmt(&self.raw, f)
     }
 }
 
-impl<'a, E: Encoding> LowerHex for OrdPathSlice<'a, E> {
+impl<E: Encoding> LowerHex for OrdPathSlice<'_, E> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         LowerHex::fmt(&self.raw, f)
     }
 }
 
-impl<'a, E: Encoding> UpperHex for OrdPathSlice<'a, E> {
+impl<E: Encoding> UpperHex for OrdPathSlice<'_, E> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         UpperHex::fmt(&self.raw, f)

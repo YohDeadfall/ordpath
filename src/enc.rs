@@ -69,7 +69,7 @@ impl fmt::Debug for Stage {
         // TODO: Use field_with when it's stabilized (https://github.com/rust-lang/rust/issues/117729).
         struct Prefix<'s>(&'s Stage);
 
-        impl<'s> fmt::Debug for Prefix<'s> {
+        impl fmt::Debug for Prefix<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let prefix = self.0.prefix();
                 let prefix_len = self.0.prefix_bits() as usize;

@@ -304,30 +304,30 @@ impl<'a> RawOrdPathSlice<'a> {
     }
 }
 
-impl<'a> PartialEq for RawOrdPathSlice<'a> {
+impl PartialEq for RawOrdPathSlice<'_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
 
-impl<'a> Eq for RawOrdPathSlice<'a> {}
+impl Eq for RawOrdPathSlice<'_> {}
 
-impl<'a> PartialOrd for RawOrdPathSlice<'a> {
+impl PartialOrd for RawOrdPathSlice<'_> {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> Ord for RawOrdPathSlice<'a> {
+impl Ord for RawOrdPathSlice<'_> {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes().cmp(other.bytes())
     }
 }
 
-impl<'a> Binary for RawOrdPathSlice<'a> {
+impl Binary for RawOrdPathSlice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for b in self.bytes() {
             write!(f, "{b:0>8b}")?;
@@ -336,7 +336,7 @@ impl<'a> Binary for RawOrdPathSlice<'a> {
     }
 }
 
-impl<'a> LowerHex for RawOrdPathSlice<'a> {
+impl LowerHex for RawOrdPathSlice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for b in self.bytes() {
             write!(f, "{b:0>2x}")?;
@@ -345,7 +345,7 @@ impl<'a> LowerHex for RawOrdPathSlice<'a> {
     }
 }
 
-impl<'a> UpperHex for RawOrdPathSlice<'a> {
+impl UpperHex for RawOrdPathSlice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for b in self.bytes() {
             write!(f, "{b:0>2X}")?;
