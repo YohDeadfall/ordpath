@@ -25,10 +25,11 @@ mod raw;
 mod reader;
 mod writer;
 
-use raw::RawOrdPath;
+use raw::{RawOrdPath, RawOrdPathSlice};
 
 pub use enc::*;
 pub use error::*;
+pub use raw::Bytes;
 pub use reader::*;
 pub use writer::*;
 
@@ -92,7 +93,20 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         Self::try_from_bytes(s, enc).unwrap()
     }
 
-    /// Tries to encode a slice of ordinals `s` and ceate a new `OrdPath`.
+    /// Tries to allocate a new `OrdPath` storing the slice.
+    pub fn try_from_slice(s: OrdPathSlice<'_, E>) -> Result<Self, Error>
+    where
+        E: Clone,
+    {
+        let mut bytes = s.bytes();
+        let mut path = Self::new(bytes.len(), s.encoding().clone())?;
+
+        bytes.read_exact(path.raw.as_mut_slice())?;
+
+        Ok(path)
+    }
+
+    /// Tries to encode a slice of ordinals `s` and create a new `OrdPath`.
     pub fn try_from_ordinals(s: &[i64], enc: E) -> Result<Self, Error> {
         let mut len = Len(0);
         let mut writer = Writer::new(&mut len, &enc);
@@ -223,56 +237,22 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # use ordpath::{DefaultEncoding, OrdPath};
     /// let path = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
     /// let parent = path.parent();
-    /// assert_eq!(parent, Some(<OrdPath>::from_ordinals(&[1], DefaultEncoding)));
+    /// assert_eq!(parent, Some(<OrdPath>::from_ordinals(&[1], DefaultEncoding).as_slice()));
     /// let grand_parent = parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_parent, Some(<OrdPath>::from_ordinals(&[], DefaultEncoding)));
+    /// assert_eq!(grand_parent, Some(<OrdPath>::from_ordinals(&[], DefaultEncoding).as_slice()));
     /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
     /// assert_eq!(grand_grand_parent, None);
     /// ```
-    pub fn parent(&self) -> Option<Self>
-    where
-        E: Clone,
-    {
-        let src = self.bytes();
-        if src.is_empty() {
-            return None;
+    pub fn parent(&self) -> Option<OrdPathSlice<'_, E>> {
+        self.as_slice().parent()
+    }
+
+    /// Returns a slice containing the entire `OrdPath`.
+    pub fn as_slice(&self) -> OrdPathSlice<E> {
+        OrdPathSlice {
+            raw: RawOrdPathSlice::new(self.bytes(), 0, self.raw.trailing_bits()),
+            enc: self.encoding(),
         }
-
-        let mut bits = 0u8;
-        let mut bytes = 0;
-        let mut reader = Reader::new(src, self.encoding());
-        unsafe {
-            // SAFETY: Validation of the data happens on creation even for a byte slice.
-            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                let mut bits_prev = stage.bits();
-                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                    let bits_tmp = bits + bits_prev;
-
-                    bits_prev = stage.bits();
-                    bits = bits_tmp & 7;
-                    bytes += bits_tmp as usize >> 3;
-                }
-
-                if bits > 0 || bytes > 0 {
-                    bytes += bits.div_ceil(8) as usize;
-                    bits &= 7;
-                }
-            }
-        }
-
-        let mut path = Self::new(bytes, self.encoding().clone()).unwrap();
-        let dst = path.raw.as_mut_slice();
-        if !dst.is_empty() {
-            dst.copy_from_slice(&src[..dst.len()]);
-
-            let bits = (8 - bits) & 7;
-            let last = &mut dst[dst.len() - 1];
-
-            *last &= u8::MAX << bits;
-            path.raw.set_trailing_bits(bits);
-        }
-
-        Some(path)
     }
 }
 
@@ -407,7 +387,7 @@ struct OrdPathVisitor<Enc, const N: usize> {
 }
 
 #[cfg(feature = "serde")]
-impl<'de, Enc: Encoding + Default, const N: usize> Visitor<'de> for OrdPathVisitor<Enc, N> {
+impl<Enc: Encoding + Default, const N: usize> Visitor<'_> for OrdPathVisitor<Enc, N> {
     type Value = OrdPath<Enc, N>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -416,6 +396,152 @@ impl<'de, Enc: Encoding + Default, const N: usize> Visitor<'de> for OrdPathVisit
 
     fn visit_bytes<Err: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, Err> {
         Self::Value::try_from_bytes(v, Default::default()).map_err(Err::custom)
+    }
+}
+
+/// A slice of an [`OrdPath`].
+pub struct OrdPathSlice<'a, E: Encoding> {
+    raw: RawOrdPathSlice<'a>,
+    enc: &'a E,
+}
+
+impl<'a, E: Encoding> OrdPathSlice<'a, E> {
+    /// Returns a reference to the used encoding.
+    #[inline]
+    pub fn encoding(&self) -> &'a E {
+        self.enc
+    }
+
+    /// An iterator over the bytes of an `OrdPathSlice`.
+    #[inline]
+    pub fn bytes(&self) -> Bytes {
+        self.raw.bytes()
+    }
+
+    /// An iterator over the ordinals of an `OrdPathSlice`.
+    #[inline]
+    pub fn ordinals(&self) -> Ordinals<Bytes, &E> {
+        Ordinals {
+            reader: Reader::new(self.bytes(), self.encoding()),
+        }
+    }
+
+    /// Returns the `OrdPathSlice` without its final element, if there is one.
+    ///
+    /// See [`OrdPath::parent()`] for an example.
+    pub fn parent(&self) -> Option<OrdPathSlice<'a, E>> {
+        let src = self.bytes();
+        if src.is_empty() {
+            return None;
+        }
+
+        let mut bits = 0u8;
+        let mut bytes = 0;
+        let mut reader = Reader::new(src, self.encoding());
+        unsafe {
+            // SAFETY: Validation of the data happens on creation even for a byte slice.
+            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                let mut bits_prev = stage.bits();
+                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                    let bits_tmp = bits + bits_prev;
+
+                    bits_prev = stage.bits();
+                    bits = bits_tmp & 7;
+                    bytes += bits_tmp as usize >> 3;
+                }
+
+                if bits > 0 || bytes > 0 {
+                    bytes += bits.div_ceil(8) as usize;
+                    bits &= 7;
+                }
+            }
+        }
+
+        Some(Self {
+            raw: self.raw.take(bytes, (8 - bits) & 7),
+            enc: self.encoding(),
+        })
+    }
+
+    /// Creates an owned [`OrdPath`] by cloning the data.
+    pub fn to_path<const N: usize>(&self) -> OrdPath<E, N>
+    where
+        E: Clone,
+    {
+        let mut bytes = self.bytes();
+        let mut path = OrdPath::new(bytes.len(), self.encoding().clone()).unwrap();
+
+        unsafe {
+            // SAFETY: The path has the same size as the slice.
+            bytes.read_exact(path.raw.as_mut_slice()).unwrap_unchecked();
+        }
+
+        path
+    }
+}
+
+impl<E: Encoding + PartialEq> PartialEq for OrdPathSlice<'_, E> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
+    }
+}
+
+impl<E: Encoding + PartialEq> PartialOrd for OrdPathSlice<'_, E> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.encoding()
+            .eq(other.encoding())
+            .then(|| self.bytes().cmp(other.bytes()))
+    }
+}
+
+impl<E: Encoding> Hash for OrdPathSlice<'_, E> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for b in self.bytes() {
+            state.write_u8(b);
+        }
+    }
+}
+
+impl<E: Encoding> Debug for OrdPathSlice<'_, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as Display>::fmt(self, f)
+    }
+}
+
+impl<E: Encoding> Display for OrdPathSlice<'_, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut ordinals = self.ordinals();
+        if let Some(value) = ordinals.next() {
+            write!(f, "{}", value)?;
+            for value in ordinals {
+                write!(f, ".{}", value)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<E: Encoding> Binary for OrdPathSlice<'_, E> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Binary::fmt(&self.raw, f)
+    }
+}
+
+impl<E: Encoding> LowerHex for OrdPathSlice<'_, E> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        LowerHex::fmt(&self.raw, f)
+    }
+}
+
+impl<E: Encoding> UpperHex for OrdPathSlice<'_, E> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        UpperHex::fmt(&self.raw, f)
     }
 }
 
@@ -611,13 +737,17 @@ mod tests {
 
     #[test]
     fn path_parent() {
+        fn parent(p: Option<OrdPath>) -> Option<OrdPath> {
+            p.and_then(|p| p.parent().and_then(|p| OrdPath::try_from_slice(p).ok()))
+        }
+
         fn assert(s: &[i64]) {
             let mut p = Some(<OrdPath>::from_ordinals(s, DefaultEncoding));
             for i in (0..s.len()).rev() {
-                p = p.and_then(|p| p.parent());
+                p = parent(p);
                 assert_eq!(p, Some(OrdPath::from_ordinals(&s[..i], DefaultEncoding)));
             }
-            assert_eq!(p.and_then(|p| p.parent()), None);
+            assert_eq!(parent(p), None);
         }
 
         assert(&[1, 2]);
