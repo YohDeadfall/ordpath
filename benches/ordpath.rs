@@ -1,11 +1,11 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ordpath::{DefaultEncoding, OrdPath};
+use ordpath::{DefaultEncoding, OrdPathBuf};
 
 fn comparison(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = <OrdPath>::from_ordinals(&seq, DefaultEncoding);
-        let y = <OrdPath>::from_ordinals(&seq, DefaultEncoding);
+        let x = <OrdPathBuf>::from_ordinals(&seq, DefaultEncoding);
+        let y = <OrdPathBuf>::from_ordinals(&seq, DefaultEncoding);
 
         c.bench_function(&format!("ordpath_comparison_{}", len), |b| {
             b.iter(|| {
@@ -21,7 +21,7 @@ fn from_slice(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_slice_{}", len), |b| {
             b.iter(|| {
-                black_box(<OrdPath>::from_ordinals(&s, DefaultEncoding));
+                black_box(<OrdPathBuf>::from_ordinals(&s, DefaultEncoding));
             })
         });
     }
@@ -36,7 +36,7 @@ fn from_str(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_from_str_{}", len), |b| {
             b.iter(|| {
-                black_box(<OrdPath>::from_str(&s, DefaultEncoding));
+                black_box(<OrdPathBuf>::from_str(&s, DefaultEncoding));
             })
         });
     }
@@ -45,8 +45,8 @@ fn from_str(c: &mut Criterion) {
 fn is_ancestor_of(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let seq = (0..*len).collect::<Vec<_>>();
-        let x = <OrdPath>::from_ordinals(&seq, DefaultEncoding);
-        let y = <OrdPath>::from_ordinals(&seq, DefaultEncoding);
+        let x = <OrdPathBuf>::from_ordinals(&seq, DefaultEncoding);
+        let y = <OrdPathBuf>::from_ordinals(&seq, DefaultEncoding);
 
         c.bench_function(&format!("ordpath_is_ancestor_of_{}", len), |b| {
             b.iter(|| {
@@ -59,7 +59,7 @@ fn is_ancestor_of(c: &mut Criterion) {
 fn iteration(c: &mut Criterion) {
     for len in &[0, 10, 50, 100, 500, 1000] {
         let s = (0..*len).collect::<Vec<_>>();
-        let p = <OrdPath>::from_ordinals(&s, DefaultEncoding);
+        let p = <OrdPathBuf>::from_ordinals(&s, DefaultEncoding);
 
         c.bench_function(&format!("ordpath_iteration{}", len), |b| {
             b.iter(|| {

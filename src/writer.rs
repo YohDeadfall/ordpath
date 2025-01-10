@@ -59,10 +59,6 @@ impl<W: Write, E: Encoding> Writer<W, E> {
 
         Ok(())
     }
-
-    pub(crate) fn trailing_bits(&self) -> u8 {
-        (192 - self.len) & 7
-    }
 }
 
 impl<W: Write + ?Sized, E: Encoding> Drop for Writer<W, E> {
