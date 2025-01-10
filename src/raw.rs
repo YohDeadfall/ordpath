@@ -362,14 +362,9 @@ pub struct Bytes<'a> {
 }
 
 impl Bytes<'_> {
-    /// Returns the length of this `Bytes`.
-    pub fn len(&self) -> usize {
-        self.data.len() - (self.head as usize + self.tail as usize).div_euclid(8)
-    }
-
     /// Returns `true` if this `Bytes` has a length of zero, and `false` otherwise.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len() == 0
     }
 }
 
@@ -425,5 +420,16 @@ impl Iterator for Bytes<'_> {
         } else {
             None
         }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for Bytes<'_> {
+    fn len(&self) -> usize {
+        self.data.len() - (self.head as usize + self.tail as usize).div_euclid(8)
     }
 }
