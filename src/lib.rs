@@ -447,7 +447,7 @@ impl<E: Encoding, const N: usize> Serialize for OrdPathBuf<E, N> {
     where
         S: Serializer,
     {
-        self.bytes().serialize(serializer)
+        self.as_ref().serialize(serializer)
     }
 }
 
