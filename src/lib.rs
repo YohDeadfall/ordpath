@@ -2,13 +2,18 @@
 
 #![deny(missing_docs)]
 
+use std::alloc::{self, Layout};
+use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::fmt::{self, Binary, Debug, Display, LowerHex, UpperHex};
+use std::fmt::{self, Debug, Display};
 use std::hash::{Hash, Hasher};
-use std::io::{self, Read, Write};
+use std::io::Read;
 use std::iter::FusedIterator;
+use std::mem::MaybeUninit;
 use std::ops::Deref;
+use std::ptr::{addr_of, addr_of_mut, NonNull};
 use std::str::FromStr;
+use std::{mem, slice};
 
 #[cfg(feature = "serde")]
 use std::marker::PhantomData;
@@ -21,33 +26,228 @@ use serde::{
 
 mod enc;
 mod error;
-mod raw;
 mod reader;
 mod writer;
 
-use raw::{RawOrdPath, RawOrdPathSlice};
-
 pub use enc::*;
 pub use error::*;
-pub use raw::Bytes;
 pub use reader::*;
 pub use writer::*;
 
-const USIZE_BYTES: usize = (usize::BITS / 8) as usize;
+const USIZE_BYTES: usize = (usize::BITS / u8::BITS) as usize;
+
+union Data<const N: usize> {
+    inline: MaybeUninit<[u8; N]>,
+    heap: NonNull<u8>,
+}
+
+impl<const N: usize> Data<N> {
+    const fn new_inline() -> Self {
+        Self {
+            inline: MaybeUninit::uninit(),
+        }
+    }
+
+    const fn new_heap(data: NonNull<u8>) -> Self {
+        Self { heap: data }
+    }
+}
+
+#[repr(C)]
+pub(crate) struct Buf<const N: usize> {
+    #[cfg(target_endian = "little")]
+    size: usize,
+    data: Data<N>,
+    #[cfg(target_endian = "big")]
+    size: usize,
+}
+
+impl<const N: usize> Buf<N> {
+    const INLINE_SIZE_LEN: usize = {
+        const fn max(lhs: usize, rhs: usize) -> usize {
+            if lhs > rhs {
+                lhs
+            } else {
+                rhs
+            }
+        }
+
+        const fn meta_size(data_len: usize) -> usize {
+            (usize::BITS - data_len.leading_zeros())
+                .saturating_add(1)
+                .div_ceil(u8::BITS) as usize
+        }
+
+        let data = max(N, size_of::<NonNull<u8>>());
+        let data = size_of::<Buf<N>>() - meta_size(data);
+
+        meta_size(data)
+    };
+
+    const INLINE_SIZE_MASK: usize =
+        (usize::MAX >> (usize::BITS - u8::BITS * Self::INLINE_SIZE_LEN as u32));
+
+    const INLINE_DATA_LEN: usize = size_of::<Self>() - Self::INLINE_SIZE_LEN;
+    const INLINE_DATA_POS: usize = if cfg!(target_endian = "little") {
+        size_of::<usize>() - Self::INLINE_SIZE_LEN
+    } else {
+        0
+    };
+
+    fn new(bits: usize) -> Result<Self, Error> {
+        if bits > usize::MAX >> 1 {
+            return Err(Error::new(ErrorKind::CapacityOverflow));
+        }
+
+        let bytes = bits.div_ceil(8);
+        let spilled = bytes >= Self::INLINE_DATA_LEN;
+
+        Ok(Self {
+            size: (bits << 1) | spilled as usize,
+            data: if spilled {
+                let layout = Layout::array::<u8>(bytes).unwrap();
+                let ptr = NonNull::new(unsafe { alloc::alloc(layout) }).unwrap();
+
+                Data::new_heap(ptr)
+            } else {
+                Data::new_inline()
+            },
+        })
+    }
+
+    #[inline]
+    const fn spilled(&self) -> bool {
+        self.size & 1 == 1
+    }
+
+    #[inline]
+    const fn len_in_bits(&self) -> usize {
+        let size = if self.spilled() {
+            self.size
+        } else {
+            self.size & Self::INLINE_SIZE_MASK
+        };
+        size >> 1
+    }
+
+    #[inline]
+    const fn len_in_bytes(&self) -> usize {
+        self.len_in_bits().div_ceil(8)
+    }
+
+    #[inline]
+    const fn as_ptr(&self) -> *const u8 {
+        unsafe {
+            if self.spilled() {
+                self.data.heap.as_ptr()
+            } else {
+                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
+                // https://github.com/rust-lang/rust/issues/96097
+                addr_of!(self.data.inline)
+                    .cast::<u8>()
+                    .byte_sub(Self::INLINE_DATA_POS)
+            }
+        }
+    }
+
+    #[inline]
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        unsafe {
+            if self.spilled() {
+                self.data.heap.as_ptr()
+            } else {
+                // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
+                // https://github.com/rust-lang/rust/issues/96097
+                addr_of_mut!(self.data.inline)
+                    .cast::<u8>()
+                    .byte_sub(Self::INLINE_DATA_POS)
+            }
+        }
+    }
+
+    #[inline]
+    const fn as_slice(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.as_ptr(), self.len_in_bytes()) }
+    }
+
+    #[inline]
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len_in_bytes()) }
+    }
+}
+
+impl<const N: usize> Drop for Buf<N> {
+    fn drop(&mut self) {
+        if self.spilled() {
+            unsafe {
+                let data = self.as_mut_slice();
+                alloc::dealloc(
+                    data.as_mut_ptr(),
+                    Layout::from_size_align_unchecked(data.len(), align_of::<u8>()),
+                );
+            }
+        }
+    }
+}
+
+impl<const N: usize> PartialEq for Buf<N> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice().eq(other.as_slice())
+    }
+}
+
+impl<const N: usize> Eq for Buf<N> {}
+
+impl<const N: usize> PartialOrd for Buf<N> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<const N: usize> Ord for Buf<N> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<const N: usize> Clone for Buf<N> {
+    fn clone(&self) -> Self {
+        let mut other = Self::new(self.len_in_bits()).unwrap();
+        other.as_mut_slice().clone_from_slice(self.as_slice());
+        other
+    }
+}
 
 /// A data type representing an ORDPATH is stored as a continuous sequence of bytes.
-pub struct OrdPath<E: Encoding = DefaultEncoding, const N: usize = USIZE_BYTES> {
-    raw: RawOrdPath<N>,
+pub struct OrdPathBuf<E: Encoding = DefaultEncoding, const N: usize = USIZE_BYTES> {
+    raw: Buf<N>,
     enc: E,
 }
 
-impl<E: Encoding, const N: usize> OrdPath<E, N> {
+impl<E: Encoding, const N: usize> OrdPathBuf<E, N> {
     #[inline]
-    fn new(len: usize, enc: E) -> Result<Self, Error> {
+    fn new(bits: usize, enc: E) -> Result<Self, Error> {
         Ok(Self {
-            raw: RawOrdPath::new(len)?,
+            raw: Buf::new(bits)?,
             enc,
         })
+    }
+
+    fn from_borrowed(s: &OrdPath<E, N>) -> Self
+    where
+        E: Clone,
+    {
+        let mut path = Self::new(s.bytes().len_in_bits(), s.encoding().clone()).unwrap();
+        unsafe {
+            // SAFETY: The buffer has exactly the same size as the slice.
+            s.bytes()
+                .read_exact(path.raw.as_mut_slice())
+                .unwrap_unchecked();
+        }
+        path
     }
 
     /// Encodes a slice `s` to return a new `OrdPath` with the specified encoding.
@@ -93,40 +293,27 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         Self::try_from_bytes(s, enc).unwrap()
     }
 
-    /// Tries to allocate a new `OrdPath` storing the slice.
-    pub fn try_from_slice(s: OrdPathSlice<'_, E>) -> Result<Self, Error>
-    where
-        E: Clone,
-    {
-        let mut bytes = s.bytes();
-        let mut path = Self::new(bytes.len(), s.encoding().clone())?;
-
-        bytes.read_exact(path.raw.as_mut_slice())?;
-
-        Ok(path)
-    }
-
     /// Tries to encode a slice of ordinals `s` and create a new `OrdPath`.
     pub fn try_from_ordinals(s: &[i64], enc: E) -> Result<Self, Error> {
-        let mut len = Len(0);
-        let mut writer = Writer::new(&mut len, &enc);
+        let mut bits = 0isize;
         for ordinal in s {
-            writer.write(*ordinal)?;
+            bits = bits.wrapping_add(
+                enc.stage_by_value(*ordinal)
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?
+                    .bits()
+                    .into(),
+            );
         }
-
-        drop(writer);
-
-        let mut path = Self::new(len.0, enc)?;
+        let mut path = Self::new(
+            bits.try_into()
+                .map_err(|_| Error::new(ErrorKind::CapacityOverflow))?,
+            enc,
+        )?;
         let mut writer = Writer::new(path.raw.as_mut_slice(), &path.enc);
         for ordinal in s {
             writer.write(*ordinal)?;
         }
-
-        let bits = writer.trailing_bits();
-
         drop(writer);
-        path.raw.set_trailing_bits(bits);
-
         Ok(path)
     }
 
@@ -142,17 +329,17 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
 
     /// Tries to create an `OrdPath` from a byte slice 's`.
     pub fn try_from_bytes(s: &[u8], enc: E) -> Result<Self, Error> {
-        let mut bits = 0u8;
+        let mut bits = 0isize;
         let mut reader = Reader::new(s, &enc);
         while let Some((_, stage)) = reader.read()? {
-            bits = bits.wrapping_add(stage.bits());
+            bits = bits.wrapping_add(stage.bits().into());
         }
-
-        let mut path = Self::new(s.len(), enc)?;
-
+        let mut path = Self::new(
+            bits.try_into()
+                .map_err(|_| Error::new(ErrorKind::CapacityOverflow))?,
+            enc,
+        )?;
         path.raw.as_mut_slice().copy_from_slice(s);
-        path.raw.set_trailing_bits(bits);
-
         Ok(path)
     }
 
@@ -161,32 +348,195 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     pub fn encoding(&self) -> &E {
         &self.enc
     }
+}
 
-    /// An iterator over the bytes of an `OrdPath`.
-    #[inline]
-    pub fn bytes(&self) -> &[u8] {
+impl<E: Encoding, const N: usize> AsRef<[u8]> for OrdPathBuf<E, N> {
+    fn as_ref(&self) -> &[u8] {
         self.raw.as_slice()
     }
+}
 
-    /// An iterator over the ordinals of an `OrdPath`.
+impl<E: Encoding, const N: usize> Borrow<OrdPath<E, N>> for OrdPathBuf<E, N> {
+    fn borrow(&self) -> &OrdPath<E, N> {
+        self
+    }
+}
+
+impl<E: Encoding, const N: usize> Deref for OrdPathBuf<E, N> {
+    type Target = OrdPath<E, N>;
+
+    fn deref(&self) -> &Self::Target {
+        OrdPath::new(self, self.raw.len_in_bits())
+    }
+}
+
+impl<E: Encoding, const N: usize> PartialEq for OrdPathBuf<E, N>
+where
+    E: PartialEq,
+{
     #[inline]
-    pub fn ordinals(&self) -> Ordinals<&[u8], &E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
+    }
+}
+
+impl<E: Encoding, const N: usize> PartialOrd for OrdPathBuf<E, N>
+where
+    E: PartialEq,
+{
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.encoding()
+            .eq(other.encoding())
+            .then(|| self.bytes().cmp(other.bytes()))
+    }
+}
+
+impl<E: Encoding, const N: usize> Hash for OrdPathBuf<E, N> {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(self.as_ref());
+    }
+}
+
+impl<E: Encoding, const N: usize> Clone for OrdPathBuf<E, N>
+where
+    E: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            raw: self.raw.clone(),
+            enc: self.enc.clone(),
+        }
+    }
+}
+
+impl<E: Encoding, const N: usize> Debug for OrdPathBuf<E, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as Display>::fmt(self, f)
+    }
+}
+
+impl<E: Encoding, const N: usize> Display for OrdPathBuf<E, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut ordinals = self.ordinals();
+        if let Some(value) = ordinals.next() {
+            write!(f, "{}", value)?;
+            for value in ordinals {
+                write!(f, ".{}", value)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<E: Encoding + Default, const N: usize> FromStr for OrdPathBuf<E, N> {
+    type Err = Error;
+
+    #[inline]
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_str(s, Default::default())
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<E: Encoding, const N: usize> Serialize for OrdPathBuf<E, N> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_ref().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+impl<'de, E: Encoding + Default, const N: usize> Deserialize<'de> for OrdPathBuf<E, N> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_bytes(OrdPathVisitor::<E, N> {
+            marker: PhantomData,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+struct OrdPathVisitor<Enc, const N: usize> {
+    marker: PhantomData<Enc>,
+}
+
+#[cfg(feature = "serde")]
+impl<Enc: Encoding + Default, const N: usize> Visitor<'_> for OrdPathVisitor<Enc, N> {
+    type Value = OrdPathBuf<Enc, N>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("bytes")
+    }
+
+    fn visit_bytes<Err: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, Err> {
+        Self::Value::try_from_bytes(v, Default::default()).map_err(Err::custom)
+    }
+}
+
+/// A slice of an [`OrdPath`].
+pub struct OrdPath<E: Encoding, const N: usize> {
+    data: [OrdPathBuf<E, N>],
+}
+
+impl<E: Encoding, const N: usize> OrdPath<E, N> {
+    #[inline]
+    fn new(path: &OrdPathBuf<E, N>, bits: usize) -> &Self {
+        unsafe { mem::transmute(slice::from_raw_parts(path as *const OrdPathBuf<E, N>, bits)) }
+    }
+
+    #[inline]
+    fn path(&self) -> &OrdPathBuf<E, N> {
+        unsafe { &*self.data.as_ptr() }
+    }
+
+    /// Returns a reference to the used encoding.
+    #[inline]
+    pub fn encoding(&self) -> &E {
+        self.path().encoding()
+    }
+
+    /// An iterator over the ordinals of an `OrdPathSlice`.
+    #[inline]
+    pub fn ordinals(&self) -> Ordinals<&Bytes, &E> {
         Ordinals {
             reader: Reader::new(self.bytes(), self.encoding()),
         }
     }
 
-    /// Returns `true` if `self` is empty.
+    /// An iterator over the bytes of an `OrdPathSlice`.
     #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.raw.len() == 0
+    pub fn bytes(&self) -> &Bytes {
+        unsafe { Bytes::from_raw_parts(self.path().as_ref().as_ptr(), self.data.len()) }
     }
 
-    /// Returns `true` if the data has spilled into a heap-allocated buffer.
-    #[inline]
-    pub fn spilled(&self) -> bool {
-        self.raw.spilled()
+    /// Returns the `OrdPathSlice` without its final element, if there is one.
+    pub fn parent(&self) -> Option<&OrdPath<E, N>> {
+        let src = self.bytes();
+        if src.len() == 0 {
+            return None;
+        }
+        let mut bits_prev = 0usize;
+        let mut reader = Reader::new(src, self.encoding());
+        unsafe {
+            // SAFETY: Validation of the data happens on creation even for a byte slice.
+            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                let mut bits = stage.bits() as usize;
+                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
+                    bits_prev = bits;
+                    bits += stage.bits() as usize;
+                }
+            }
+        }
+        Some(Self::new(self.path(), bits_prev))
     }
 
     /// Returns `true` if `self` is an ancestor of `other`.
@@ -194,9 +544,9 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # Examples
     ///
     /// ```
-    /// # use ordpath::{DefaultEncoding, OrdPath};
-    /// let a = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
-    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], DefaultEncoding);
+    /// # use ordpath::{DefaultEncoding, OrdPathBuf};
+    /// let a = <OrdPathBuf>::from_ordinals(&[1, 2], DefaultEncoding);
+    /// let d = <OrdPathBuf>::from_ordinals(&[1, 2, 3], DefaultEncoding);
     /// assert!(a.is_ancestor_of(&d));
     /// ```
     //
@@ -206,7 +556,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     where
         E: PartialEq,
     {
-        self.encoding().eq(other.encoding()) && self.raw.is_ancestor(&other.raw)
+        self.encoding().eq(other.encoding()) && self.bytes().is_ancestor(other.bytes())
     }
 
     /// Returns `true` if `self` is an descendant of `other`.
@@ -214,9 +564,9 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     /// # Examples
     ///
     /// ```
-    /// # use ordpath::{DefaultEncoding, OrdPath};
-    /// let a = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
-    /// let d = <OrdPath>::from_ordinals(&[1, 2, 3], DefaultEncoding);
+    /// # use ordpath::{DefaultEncoding, OrdPathBuf};
+    /// let a = <OrdPathBuf>::from_ordinals(&[1, 2], DefaultEncoding);
+    /// let d = <OrdPathBuf>::from_ordinals(&[1, 2, 3], DefaultEncoding);
     /// assert!(d.is_descendant_of(&a));
     /// ```
     ///
@@ -228,38 +578,22 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
     {
         other.is_ancestor_of(self)
     }
+}
 
-    /// Returns the `OrdPath` without its final element, if there is one.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use ordpath::{DefaultEncoding, OrdPath};
-    /// let path = <OrdPath>::from_ordinals(&[1, 2], DefaultEncoding);
-    /// let parent = path.parent();
-    /// assert_eq!(parent, Some(<OrdPath>::from_ordinals(&[1], DefaultEncoding).as_slice()));
-    /// let grand_parent = parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_parent, Some(<OrdPath>::from_ordinals(&[], DefaultEncoding).as_slice()));
-    /// let grand_grand_parent = grand_parent.and_then(|p| p.parent());
-    /// assert_eq!(grand_grand_parent, None);
-    /// ```
-    pub fn parent(&self) -> Option<OrdPathSlice<'_, E>> {
-        self.as_slice().parent()
-    }
+impl<E: Encoding + Clone, const N: usize> ToOwned for OrdPath<E, N> {
+    type Owned = OrdPathBuf<E, N>;
 
-    /// Returns a slice containing the entire `OrdPath`.
-    pub fn as_slice(&self) -> OrdPathSlice<E> {
-        OrdPathSlice {
-            raw: RawOrdPathSlice::new(self.bytes(), 0, self.raw.trailing_bits()),
-            enc: self.encoding(),
-        }
+    #[inline]
+    fn to_owned(&self) -> OrdPathBuf<E, N> {
+        OrdPathBuf::from_borrowed(self)
     }
 }
 
 impl<E: Encoding + PartialEq, const N: usize> PartialEq for OrdPath<E, N> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
+        self.partial_cmp(other)
+            .is_some_and(|r| r == Ordering::Equal)
     }
 }
 
@@ -275,30 +609,14 @@ impl<E: Encoding + PartialEq, const N: usize> PartialOrd for OrdPath<E, N> {
 impl<E: Encoding, const N: usize> Hash for OrdPath<E, N> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(self);
-    }
-}
-
-impl<E: Encoding + Clone, const N: usize> Clone for OrdPath<E, N> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            raw: self.raw.clone(),
-            enc: self.enc.clone(),
+        for b in self.bytes() {
+            state.write_u8(b);
         }
     }
 }
 
-impl<E: Encoding, const N: usize> Deref for OrdPath<E, N> {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.bytes()
-    }
-}
-
 impl<E: Encoding, const N: usize> Debug for OrdPath<E, N> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         <Self as Display>::fmt(self, f)
     }
@@ -317,231 +635,170 @@ impl<E: Encoding, const N: usize> Display for OrdPath<E, N> {
     }
 }
 
-impl<E: Encoding, const N: usize> Binary for OrdPath<E, N> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Binary::fmt(&self.raw, f)
-    }
+/// An iterator over the bytes of an [`OrdPath`].
+///
+/// This struct is created by the [`bytes`] method on [`OrdPath`].
+/// See its documentation for more.
+///
+/// [`bytes`]: OrdPath::bytes
+#[repr(transparent)]
+pub struct Bytes {
+    data: [u8],
 }
 
-impl<E: Encoding, const N: usize> LowerHex for OrdPath<E, N> {
+impl Bytes {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        LowerHex::fmt(&self.raw, f)
+    unsafe fn from_raw_parts<'a>(ptr: *const u8, bits: usize) -> &'a Self {
+        unsafe { mem::transmute(slice::from_raw_parts(ptr, bits)) }
     }
-}
-
-impl<E: Encoding, const N: usize> UpperHex for OrdPath<E, N> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        UpperHex::fmt(&self.raw, f)
-    }
-}
-
-impl<'a, E: Encoding, const N: usize> IntoIterator for &'a OrdPath<E, N> {
-    type Item = i64;
-    type IntoIter = Ordinals<&'a [u8], &'a E>;
 
     #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.ordinals()
+    const fn len_in_bits(&self) -> usize {
+        self.data.len()
     }
-}
-
-impl<E: Encoding + Default, const N: usize> FromStr for OrdPath<E, N> {
-    type Err = Error;
 
     #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from_str(s, Default::default())
-    }
-}
-
-#[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<E: Encoding, const N: usize> Serialize for OrdPath<E, N> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.bytes().serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-#[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
-impl<'de, E: Encoding + Default, const N: usize> Deserialize<'de> for OrdPath<E, N> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_bytes(OrdPathVisitor::<E, N> {
-            marker: PhantomData,
-        })
-    }
-}
-
-#[cfg(feature = "serde")]
-struct OrdPathVisitor<Enc, const N: usize> {
-    marker: PhantomData<Enc>,
-}
-
-#[cfg(feature = "serde")]
-impl<Enc: Encoding + Default, const N: usize> Visitor<'_> for OrdPathVisitor<Enc, N> {
-    type Value = OrdPath<Enc, N>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("bytes")
+    const fn len_in_bytes(&self) -> usize {
+        self.len_in_bits().div_ceil(8)
     }
 
-    fn visit_bytes<Err: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, Err> {
-        Self::Value::try_from_bytes(v, Default::default()).map_err(Err::custom)
-    }
-}
-
-/// A slice of an [`OrdPath`].
-pub struct OrdPathSlice<'a, E: Encoding> {
-    raw: RawOrdPathSlice<'a>,
-    enc: &'a E,
-}
-
-impl<'a, E: Encoding> OrdPathSlice<'a, E> {
-    /// Returns a reference to the used encoding.
-    #[inline]
-    pub fn encoding(&self) -> &'a E {
-        self.enc
+    unsafe fn get_at_unchecked(&self, idx: usize) -> u8 {
+        unsafe { self.data.as_ptr().add(idx).read() }
     }
 
-    /// An iterator over the bytes of an `OrdPathSlice`.
-    #[inline]
-    pub fn bytes(&self) -> Bytes {
-        self.raw.bytes()
+    unsafe fn get_slice_unchecked(&self, len: usize) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.data.as_ptr(), len) }
     }
 
-    /// An iterator over the ordinals of an `OrdPathSlice`.
-    #[inline]
-    pub fn ordinals(&self) -> Ordinals<Bytes, &E> {
-        Ordinals {
-            reader: Reader::new(self.bytes(), self.encoding()),
-        }
-    }
-
-    /// Returns the `OrdPathSlice` without its final element, if there is one.
-    ///
-    /// See [`OrdPath::parent()`] for an example.
-    pub fn parent(&self) -> Option<OrdPathSlice<'a, E>> {
-        let src = self.bytes();
-        if src.is_empty() {
-            return None;
-        }
-
-        let mut bits = 0u8;
-        let mut bytes = 0;
-        let mut reader = Reader::new(src, self.encoding());
-        unsafe {
-            // SAFETY: Validation of the data happens on creation even for a byte slice.
-            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                let mut bits_prev = stage.bits();
-                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                    let bits_tmp = bits + bits_prev;
-
-                    bits_prev = stage.bits();
-                    bits = bits_tmp & 7;
-                    bytes += bits_tmp as usize >> 3;
-                }
-
-                if bits > 0 || bytes > 0 {
-                    bytes += bits.div_ceil(8) as usize;
-                    bits &= 7;
-                }
+    fn is_ancestor(&self, other: &Self) -> bool {
+        self.len_in_bits() < other.len_in_bits()
+            && match self.len_in_bytes() {
+                0 => true,
+                bytes => unsafe {
+                    // SAFETY: The size is verified in the code above.
+                    let last = bytes - 1;
+                    self.get_slice_unchecked(last)
+                        .eq(other.get_slice_unchecked(last))
+                        && high_bits_eq(
+                            self.len_in_bits(),
+                            self.get_at_unchecked(last),
+                            other.get_at_unchecked(last),
+                        )
+                },
             }
-        }
-
-        Some(Self {
-            raw: self.raw.take(bytes, (8 - bits) & 7),
-            enc: self.encoding(),
-        })
-    }
-
-    /// Creates an owned [`OrdPath`] by cloning the data.
-    pub fn to_path<const N: usize>(&self) -> OrdPath<E, N>
-    where
-        E: Clone,
-    {
-        let mut bytes = self.bytes();
-        let mut path = OrdPath::new(bytes.len(), self.encoding().clone()).unwrap();
-
-        unsafe {
-            // SAFETY: The path has the same size as the slice.
-            bytes.read_exact(path.raw.as_mut_slice()).unwrap_unchecked();
-        }
-
-        path
     }
 }
 
-impl<E: Encoding + PartialEq> PartialEq for OrdPathSlice<'_, E> {
+impl Read for &Bytes {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        unsafe {
+            let mut data = self.get_slice_unchecked(self.len_in_bytes());
+            let read = data.read(buf)?;
+            if read > 0 && data.is_empty() {
+                *buf.get_unchecked_mut(read - 1) &= high_bits_mask(self.len_in_bits());
+            }
+
+            *self =
+                Bytes::from_raw_parts(data.as_ptr(), self.len_in_bits().saturating_sub(read * 8));
+
+            Ok(read)
+        }
+    }
+}
+
+impl Iterator for &Bytes {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        let mut buf = [0; 1];
+        if self.read_exact(&mut buf).is_ok() {
+            Some(buf[0])
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for &Bytes {
+    fn len(&self) -> usize {
+        self.len_in_bytes()
+    }
+}
+
+impl FusedIterator for &Bytes {}
+
+impl PartialEq for &Bytes {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.encoding().eq(other.encoding()) && self.raw.eq(&other.raw)
+        self.len_in_bits() == other.len_in_bits()
+            && match self.len_in_bytes() {
+                0 => true,
+                bytes => {
+                    unsafe {
+                        // SAFETY: The size is verified in the code above.
+                        let last = bytes - 1;
+                        self.get_slice_unchecked(last) == other.get_slice_unchecked(last)
+                            && high_bits_eq(
+                                self.len_in_bits(),
+                                self.get_at_unchecked(last),
+                                other.get_at_unchecked(last),
+                            )
+                    }
+                }
+            }
     }
 }
 
-impl<E: Encoding + PartialEq> PartialOrd for OrdPathSlice<'_, E> {
+impl Eq for &Bytes {}
+
+impl PartialOrd for &Bytes {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.encoding()
-            .eq(other.encoding())
-            .then(|| self.bytes().cmp(other.bytes()))
+        Some(self.cmp(other))
     }
 }
 
-impl<E: Encoding> Hash for OrdPathSlice<'_, E> {
+impl Ord for &Bytes {
     #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        for b in self.bytes() {
-            state.write_u8(b);
-        }
-    }
-}
+    fn cmp(&self, other: &Self) -> Ordering {
+        fn cmp_impl(shortest: &Bytes, longest: &Bytes) -> Ordering {
+            match shortest.len_in_bytes() {
+                0 => Ordering::Equal,
+                bytes => unsafe {
+                    // SAFETY: The size is verified in the code above.
+                    let last = bytes - 1;
+                    shortest
+                        .get_slice_unchecked(last)
+                        .cmp(longest.get_slice_unchecked(last))
+                        .then_with(|| {
+                            let left = shortest.get_at_unchecked(last)
+                                & high_bits_mask(shortest.len_in_bits());
+                            let right = longest.get_at_unchecked(last)
+                                & high_bits_mask(if bytes * 8 < longest.len_in_bits() {
+                                    0
+                                } else {
+                                    longest.len_in_bits()
+                                });
 
-impl<E: Encoding> Debug for OrdPathSlice<'_, E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <Self as Display>::fmt(self, f)
-    }
-}
-
-impl<E: Encoding> Display for OrdPathSlice<'_, E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut ordinals = self.ordinals();
-        if let Some(value) = ordinals.next() {
-            write!(f, "{}", value)?;
-            for value in ordinals {
-                write!(f, ".{}", value)?;
+                            left.cmp(&right)
+                        })
+                },
             }
         }
-        Ok(())
-    }
-}
 
-impl<E: Encoding> Binary for OrdPathSlice<'_, E> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Binary::fmt(&self.raw, f)
-    }
-}
-
-impl<E: Encoding> LowerHex for OrdPathSlice<'_, E> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        LowerHex::fmt(&self.raw, f)
-    }
-}
-
-impl<E: Encoding> UpperHex for OrdPathSlice<'_, E> {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        UpperHex::fmt(&self.raw, f)
+        let ord = self.len_in_bits().cmp(&other.len_in_bits());
+        if ord.is_le() {
+            cmp_impl(self, other)
+        } else {
+            cmp_impl(other, self).reverse()
+        }
+        .then(ord)
     }
 }
 
@@ -565,21 +822,15 @@ impl<R: Read, E: Encoding> Iterator for Ordinals<R, E> {
 
 impl<R: Read, E: Encoding> FusedIterator for Ordinals<R, E> {}
 
-struct Len(usize);
+#[inline]
+fn high_bits_eq(bits: usize, lhs: u8, rhs: u8) -> bool {
+    let mask = high_bits_mask(bits);
+    lhs & mask == rhs & mask
+}
 
-impl Write for Len {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0 = self
-            .0
-            .checked_add(buf.len())
-            .ok_or_else(|| io::Error::other("reached memory limit"))?;
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
+#[inline]
+fn high_bits_mask(bits: usize) -> u8 {
+    u8::MAX << (((usize::MAX << 3) - bits) & 7)
 }
 
 #[cfg(test)]
@@ -590,8 +841,8 @@ mod tests {
     fn path_from_ordinals() {
         fn assert(s: &[i64]) {
             assert_eq!(
-                <OrdPath>::from_ordinals(s, DefaultEncoding)
-                    .into_iter()
+                <OrdPathBuf>::from_ordinals(s, DefaultEncoding)
+                    .ordinals()
                     .collect::<Vec<_>>(),
                 s
             );
@@ -625,13 +876,16 @@ mod tests {
     fn path_from_str() {
         fn assert(s: &str, o: &[i64]) {
             assert_eq!(
-                <OrdPath>::try_from_str(s, DefaultEncoding),
-                Ok(<OrdPath>::from_ordinals(o, DefaultEncoding))
+                <OrdPathBuf>::try_from_str(s, DefaultEncoding),
+                Ok(<OrdPathBuf>::from_ordinals(o, DefaultEncoding))
             );
         }
 
         fn assert_err(s: &str, e: Error) {
-            assert_eq!(<OrdPath>::try_from_str(s, DefaultEncoding), Err(e.clone()));
+            assert_eq!(
+                <OrdPathBuf>::try_from_str(s, DefaultEncoding),
+                Err(e.clone())
+            );
         }
 
         assert("", &[]);
@@ -646,7 +900,10 @@ mod tests {
     #[test]
     fn path_to_string() {
         fn assert(o: Vec<i64>, s: &str) {
-            assert_eq!(<OrdPath>::from_ordinals(&o, DefaultEncoding).to_string(), s);
+            assert_eq!(
+                <OrdPathBuf>::from_ordinals(&o, DefaultEncoding).to_string(),
+                s
+            );
         }
 
         assert(vec![], "");
@@ -659,8 +916,8 @@ mod tests {
     fn path_clone() {
         fn assert(o: &[i64]) {
             assert_eq!(
-                <OrdPath>::from_ordinals(o, DefaultEncoding).clone(),
-                <OrdPath>::from_ordinals(o, DefaultEncoding)
+                <OrdPathBuf>::from_ordinals(o, DefaultEncoding).clone(),
+                <OrdPathBuf>::from_ordinals(o, DefaultEncoding)
             );
         }
 
@@ -674,9 +931,9 @@ mod tests {
     fn path_ordering() {
         fn assert(lhs: &[i64], rhs: &[i64], o: Ordering) {
             assert_eq!(
-                <OrdPath>::from_ordinals(lhs, DefaultEncoding)
-                    .cmp(&<OrdPath>::from_ordinals(rhs, DefaultEncoding)),
-                o
+                <OrdPathBuf>::from_ordinals(lhs, DefaultEncoding)
+                    .partial_cmp(&<OrdPathBuf>::from_ordinals(rhs, DefaultEncoding)),
+                Some(o)
             );
         }
 
@@ -693,8 +950,8 @@ mod tests {
     #[test]
     fn path_is_ancestor() {
         fn assert(e: bool, a: &[i64], d: &[i64]) {
-            let x = <OrdPath>::from_ordinals(a, DefaultEncoding);
-            let y = <OrdPath>::from_ordinals(d, DefaultEncoding);
+            let x = <OrdPathBuf>::from_ordinals(a, DefaultEncoding);
+            let y = <OrdPathBuf>::from_ordinals(d, DefaultEncoding);
 
             assert_eq!(e, x.is_ancestor_of(&y));
             assert_eq!(e, y.is_descendant_of(&x));
@@ -732,20 +989,20 @@ mod tests {
             assert_eq!(iter.next(), None);
         }
 
-        assert(<OrdPath>::from_ordinals(&[1, 2], DefaultEncoding).ordinals());
+        assert(<OrdPathBuf>::from_ordinals(&[1, 2], DefaultEncoding).ordinals());
     }
 
     #[test]
     fn path_parent() {
-        fn parent(p: Option<OrdPath>) -> Option<OrdPath> {
-            p.and_then(|p| p.parent().and_then(|p| OrdPath::try_from_slice(p).ok()))
+        fn parent(p: Option<OrdPathBuf>) -> Option<OrdPathBuf> {
+            p.and_then(|p| p.parent().map(|p| p.to_owned()))
         }
 
         fn assert(s: &[i64]) {
-            let mut p = Some(<OrdPath>::from_ordinals(s, DefaultEncoding));
+            let mut p = Some(<OrdPathBuf>::from_ordinals(s, DefaultEncoding));
             for i in (0..s.len()).rev() {
                 p = parent(p);
-                assert_eq!(p, Some(OrdPath::from_ordinals(&s[..i], DefaultEncoding)));
+                assert_eq!(p, Some(OrdPathBuf::from_ordinals(&s[..i], DefaultEncoding)));
             }
             assert_eq!(parent(p), None);
         }
@@ -758,7 +1015,7 @@ mod tests {
     #[test]
     fn path_serialization() {
         fn assert(s: &[i64]) {
-            let p = <OrdPath>::from_ordinals(s, DefaultEncoding);
+            let p = <OrdPathBuf>::from_ordinals(s, DefaultEncoding);
             let encoded = bincode::serialize(&p).unwrap();
             let decoded = bincode::deserialize(&encoded).unwrap();
 
