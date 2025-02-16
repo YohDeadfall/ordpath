@@ -504,7 +504,13 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         self.path().encoding()
     }
 
-    /// An iterator over the ordinals of an `OrdPathSlice`.
+    /// Produces an iterator over the bytes of an `OrdPath`.
+    #[inline]
+    pub fn bytes(&self) -> &Bytes {
+        unsafe { Bytes::from_raw_parts(self.path().as_ref().as_ptr(), self.data.len()) }
+    }
+
+    /// Produces an iterator over the ordinals of an `OrdPath`.
     #[inline]
     pub fn ordinals(&self) -> Ordinals<&Bytes, &E> {
         Ordinals {
@@ -512,13 +518,28 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
         }
     }
 
-    /// An iterator over the bytes of an `OrdPathSlice`.
+    /// Produces an iterator over `OrdPath` ancestors.
+    ///
+    /// The iterator will yield the `OrdPath` that is returned if the [`parent`] method is used one
+    /// or more times. If the [`parent`] method returns [`None`], the iterator will do likewise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ordpath::{DefaultEncoding, OrdPathBuf};
+    /// let path = <OrdPathBuf>::from_ordinals(&[1, 2, 3], DefaultEncoding);
+    /// let mut ancestors = path.ancestors();
+    /// assert_eq!(ancestors.next().map(|p| p.to_string()), Some("1.2".to_owned()));
+    /// assert_eq!(ancestors.next().map(|p| p.to_string()), Some("1".to_owned()));
+    /// assert_eq!(ancestors.next().map(|p| p.to_string()), Some("".to_owned()));
+    /// assert_eq!(ancestors.next(), None);
+    /// ```
     #[inline]
-    pub fn bytes(&self) -> &Bytes {
-        unsafe { Bytes::from_raw_parts(self.path().as_ref().as_ptr(), self.data.len()) }
+    pub fn ancestors(&self) -> Ancestors<'_, E, N> {
+        Ancestors { path: Some(self) }
     }
 
-    /// Returns the `OrdPathSlice` without its final element, if there is one.
+    /// Returns the `OrdPath` without its final element, if there is one.
     pub fn parent(&self) -> Option<&OrdPath<E, N>> {
         let src = self.bytes();
         if src.len() == 0 {
@@ -821,6 +842,37 @@ impl<R: Read, E: Encoding> Iterator for Ordinals<R, E> {
 }
 
 impl<R: Read, E: Encoding> FusedIterator for Ordinals<R, E> {}
+
+/// An iterator over `OrdPath` ancestors.
+///
+/// This struct is created by the [`ancestors`] method on [`OrdPath`].
+/// See its documentation for more.
+///
+/// # Examples
+/// ```
+/// # use ordpath::{DefaultEncoding, OrdPathBuf};
+/// let path = <OrdPathBuf>::from_ordinals(&[1, 2, 3], DefaultEncoding);
+///
+/// for ancestor in path.ancestors() {
+///     println!("{ancestor}");
+/// }
+/// ```
+///
+/// [`ancestors`]: OrdPath::ancestors
+pub struct Ancestors<'a, E: Encoding, const N: usize> {
+    path: Option<&'a OrdPath<E, N>>,
+}
+
+impl<'a, E: Encoding, const N: usize> Iterator for Ancestors<'a, E, N> {
+    type Item = &'a OrdPath<E, N>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.path = self.path.and_then(|p| p.parent());
+        self.path
+    }
+}
+
+impl<E: Encoding, const N: usize> FusedIterator for Ancestors<'_, E, N> {}
 
 #[inline]
 fn high_bits_eq(bits: usize, lhs: u8, rhs: u8) -> bool {
