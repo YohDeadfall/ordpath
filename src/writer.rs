@@ -32,8 +32,8 @@ impl<W: Write, E: Encoding> Writer<W, E> {
         let value = (value - stage.ordinal_min()) as u64;
 
         let buf = match stage.bits() < 64 {
-            true => (prefix << (stage.ordinal_bits()) | value) << (64 - stage.bits()),
-            false => prefix << (64 - stage.prefix_bits()) | (value >> (stage.bits() - 64)),
+            true => ((prefix << stage.ordinal_bits()) | value) << (64 - stage.bits()),
+            false => (prefix << (64 - stage.prefix_bits())) | (value >> (stage.bits() - 64)),
         };
 
         let len = self.len & 127;

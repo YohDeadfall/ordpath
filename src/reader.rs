@@ -45,7 +45,7 @@ impl<R: Read, E: Encoding> Reader<R, E> {
         if consumed > 0 {
             let acc_next = u64::from_be_bytes(buf);
             let acc = if self.len > 0 {
-                acc_next >> self.len | self.acc
+                (acc_next >> self.len) | self.acc
             } else {
                 acc_next
             };
