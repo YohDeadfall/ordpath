@@ -1068,8 +1068,6 @@ mod tests {
         for n in 1..ords.len() {
             let ords = &ords[..n];
             let path = <OrdPathBuf>::from_ordinals(ords, DefaultEncoding);
-            dbg!(&ords);
-            dbg!(&path);
             assert_eq!(
                 ords[..(ords.len() - 1)],
                 path.parent()
