@@ -541,23 +541,7 @@ impl<E: Encoding, const N: usize> OrdPath<E, N> {
 
     /// Returns the `OrdPath` without its final element, if there is one.
     pub fn parent(&self) -> Option<&OrdPath<E, N>> {
-        let src = self.bytes();
-        if src.len() == 0 {
-            return None;
-        }
-        let mut bits_prev = 0usize;
-        let mut reader = Reader::new(src, self.encoding());
-        unsafe {
-            // SAFETY: Validation of the data happens on creation even for a byte slice.
-            if let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                let mut bits = stage.bits() as usize;
-                while let Some((_, stage)) = reader.read().unwrap_unchecked() {
-                    bits_prev = bits;
-                    bits += stage.bits() as usize;
-                }
-            }
-        }
-        Some(Self::new(self.path(), bits_prev))
+        self.ancestors().next()
     }
 
     /// Returns `true` if `self` is an ancestor of `other`.
@@ -707,6 +691,32 @@ impl Bytes {
                         )
                 },
             }
+    }
+
+    #[inline]
+    fn ancestor<E: Encoding>(&self, enc: &E, nth: usize) -> Option<&Self> {
+        const FORWARD_BUF_LEN: usize = size_of::<usize>();
+        let mut bytes = self;
+        for _ in 0..=nth.div_ceil(FORWARD_BUF_LEN) {
+            if bytes.len_in_bits() == 0 {
+                return None;
+            }
+            let mut idx = 0;
+            let mut buf = [0u8; FORWARD_BUF_LEN];
+            let mut bits = 0;
+            let mut reader = Reader::new(bytes, enc);
+            while let Some((_, stage)) = reader.read().unwrap() {
+                bits += stage.bits() as usize;
+                buf[idx % buf.len()] = stage.bits();
+                idx = idx.wrapping_add(1);
+            }
+            for _ in 0..=buf.len().min(nth % FORWARD_BUF_LEN) {
+                idx = idx.wrapping_sub(1);
+                bits -= buf[idx % buf.len()] as usize;
+            }
+            bytes = unsafe { Bytes::from_raw_parts(bytes.data.as_ptr(), bits) };
+        }
+        Some(bytes)
     }
 }
 
@@ -867,7 +877,15 @@ impl<'a, E: Encoding, const N: usize> Iterator for Ancestors<'a, E, N> {
     type Item = &'a OrdPath<E, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.path = self.path.and_then(|p| p.parent());
+        self.nth(0)
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.path = self.path.and_then(|p| {
+            p.bytes()
+                .ancestor(p.encoding(), n)
+                .map(|b| OrdPath::new(p.path(), b.len_in_bits()))
+        });
         self.path
     }
 }
@@ -1046,21 +1064,19 @@ mod tests {
 
     #[test]
     fn path_parent() {
-        fn parent(p: Option<OrdPathBuf>) -> Option<OrdPathBuf> {
-            p.and_then(|p| p.parent().map(|p| p.to_owned()))
+        let ords = (i8::MIN..i8::MAX).map(|x| x as i64).collect::<Vec<_>>();
+        for n in 1..ords.len() {
+            let ords = &ords[..n];
+            let path = <OrdPathBuf>::from_ordinals(ords, DefaultEncoding);
+            dbg!(&ords);
+            dbg!(&path);
+            assert_eq!(
+                ords[..(ords.len() - 1)],
+                path.parent()
+                    .map(|p| p.ordinals().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            );
         }
-
-        fn assert(s: &[i64]) {
-            let mut p = Some(<OrdPathBuf>::from_ordinals(s, DefaultEncoding));
-            for i in (0..s.len()).rev() {
-                p = parent(p);
-                assert_eq!(p, Some(OrdPathBuf::from_ordinals(&s[..i], DefaultEncoding)));
-            }
-            assert_eq!(parent(p), None);
-        }
-
-        assert(&[1, 2]);
-        assert(&[344, 345]);
     }
 
     #[cfg(feature = "serde")]
