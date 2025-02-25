@@ -9,7 +9,7 @@ fn comparison(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_comparison_{}", len), |b| {
             b.iter(|| {
-                black_box(x.cmp(&y));
+                black_box(x.partial_cmp(&y));
             })
         });
     }
@@ -63,7 +63,7 @@ fn iteration(c: &mut Criterion) {
 
         c.bench_function(&format!("ordpath_iteration{}", len), |b| {
             b.iter(|| {
-                for x in &p {
+                for x in p.ordinals() {
                     black_box(x);
                 }
             })
