@@ -738,25 +738,122 @@ impl Read for &Bytes {
     }
 }
 
-impl Iterator for &Bytes {
-    type Item = u8;
+trait UncheckedIterator: Iterator {
+    unsafe fn next_unchecked(&mut self) -> Self::Item;
+    unsafe fn next_back_unchecked(&mut self) -> Self::Item;
+}
 
-    fn next(&mut self) -> Option<u8> {
-        let mut buf = [0; 1];
-        if self.read_exact(&mut buf).is_ok() {
-            Some(buf[0])
-        } else {
-            None
+impl UncheckedIterator for &Bytes {
+    #[inline(always)]
+    unsafe fn next_unchecked(&mut self) -> Self::Item {
+        unsafe {
+            let item = self.get_at_unchecked(0);
+            let bits = self.len_in_bits();
+            let (bits, item) = if bits >= 8 {
+                (bits - 8, item)
+            } else {
+                (0, item & high_bits_mask(bits))
+            };
+
+            *self = Bytes::from_raw_parts(self.data.as_ptr().add(1), bits);
+
+            item
         }
     }
 
+    #[inline(always)]
+    unsafe fn next_back_unchecked(&mut self) -> Self::Item {
+        unsafe {
+            let item = self.get_at_unchecked(self.len_in_bytes() - 1);
+            let bits = self.len_in_bits();
+            let (bits, item) = if bits & 7 == 0 {
+                (bits - 8, item)
+            } else {
+                (bits & (!7), item & high_bits_mask(self.len_in_bits()))
+            };
+
+            *self = Bytes::from_raw_parts(self.data.as_ptr(), bits);
+
+            item
+        }
+    }
+}
+
+impl Iterator for &Bytes {
+    type Item = u8;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            if self.len_in_bits() == 0 {
+                None
+            } else {
+                Some(self.next_unchecked())
+            }
+        }
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        unsafe {
+            let bytes = self.len_in_bytes();
+            if bytes <= n {
+                *self = Bytes::from_raw_parts(self.data.as_ptr().add(bytes), 0);
+
+                None
+            } else {
+                *self =
+                    Bytes::from_raw_parts(self.data.as_ptr().add(n), self.len_in_bits() - n * 8);
+
+                Some(self.next_unchecked())
+            }
+        }
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item>
+    where
+        Self: Sized,
+    {
+        self.next_back()
+    }
+
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.len();
         (len, Some(len))
     }
 }
 
+impl DoubleEndedIterator for &Bytes {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        unsafe {
+            if self.len_in_bits() == 0 {
+                None
+            } else {
+                Some(self.next_back_unchecked())
+            }
+        }
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        unsafe {
+            let bytes = self.len_in_bytes();
+            if bytes <= n {
+                *self = Bytes::from_raw_parts(self.data.as_ptr(), 0);
+
+                None
+            } else {
+                *self = Bytes::from_raw_parts(self.data.as_ptr(), self.len_in_bits() - n * 8);
+
+                Some(self.next_back_unchecked())
+            }
+        }
+    }
+}
+
 impl ExactSizeIterator for &Bytes {
+    #[inline]
     fn len(&self) -> usize {
         self.len_in_bytes()
     }
@@ -846,6 +943,7 @@ pub struct Ordinals<R: Read, E: Encoding> {
 impl<R: Read, E: Encoding> Iterator for Ordinals<R, E> {
     type Item = i64;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.reader.read().unwrap().map(|x| x.0)
     }
@@ -876,10 +974,12 @@ pub struct Ancestors<'a, E: Encoding, const N: usize> {
 impl<'a, E: Encoding, const N: usize> Iterator for Ancestors<'a, E, N> {
     type Item = &'a OrdPath<E, N>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.nth(0)
     }
 
+    #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         self.path = self.path.and_then(|p| {
             p.bytes()
@@ -1089,5 +1189,51 @@ mod tests {
         }
 
         assert(&[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn bytes_next() {
+        let path = <OrdPathBuf>::from_ordinals(&(0..5).collect::<Vec<_>>(), DefaultEncoding);
+        assert_eq!(
+            path.bytes().collect::<Vec<_>>(),
+            path.as_ref().iter().copied().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bytes_next_back() {
+        let path = <OrdPathBuf>::from_ordinals(&(0..5).collect::<Vec<_>>(), DefaultEncoding);
+        assert_eq!(
+            path.bytes().rev().collect::<Vec<_>>(),
+            path.as_ref().iter().copied().rev().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bytes_nth() {
+        let nth = 5;
+        let len = (0..nth as i64).reduce(|l, n| l + n).unwrap();
+        let path = <OrdPathBuf>::from_ordinals(&(0..len).collect::<Vec<_>>(), DefaultEncoding);
+
+        let mut actual = path.bytes();
+        let mut expected = path.as_ref().iter().copied();
+
+        for n in 0..=nth {
+            assert_eq!(actual.nth(n), expected.nth(n));
+        }
+    }
+
+    #[test]
+    fn bytes_nth_back() {
+        let nth = 5;
+        let len = (0..=nth as i64).reduce(|l, n| l + n).unwrap();
+        let path = <OrdPathBuf>::from_ordinals(&(0..len).collect::<Vec<_>>(), DefaultEncoding);
+
+        let mut actual = path.bytes();
+        let mut expected = path.as_ref().iter().copied();
+
+        for n in 0..=nth {
+            assert_eq!(actual.nth_back(n), expected.nth_back(n));
+        }
     }
 }
