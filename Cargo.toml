@@ -12,6 +12,9 @@ keywords = ["encoding", "ordering", "hierarchy", "labeling"]
 categories = ["encoding"]
 exclude = [".github/"]
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
 serde = { version = "1", optional = true, default-features = false }
 
