@@ -11,7 +11,7 @@ use std::io::Read;
 use std::iter::FusedIterator;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
-use std::ptr::{addr_of, addr_of_mut, NonNull};
+use std::ptr::NonNull;
 use std::str::FromStr;
 use std::{mem, slice};
 
@@ -143,7 +143,7 @@ impl<const N: usize> Buf<N> {
             } else {
                 // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
                 // https://github.com/rust-lang/rust/issues/96097
-                addr_of!(self.data.inline)
+                (&raw const self.data.inline)
                     .cast::<u8>()
                     .byte_sub(Self::INLINE_DATA_POS)
             }
@@ -158,7 +158,7 @@ impl<const N: usize> Buf<N> {
             } else {
                 // TODO: replace by transpose when maybe_uninit_uninit_array_transpose stabilized.
                 // https://github.com/rust-lang/rust/issues/96097
-                addr_of_mut!(self.data.inline)
+                (&raw mut self.data.inline)
                     .cast::<u8>()
                     .byte_sub(Self::INLINE_DATA_POS)
             }
