@@ -2,7 +2,7 @@
 name = "ordpath"
 version = "0.5.0"
 authors = ["Yoh Deadfall <yoh.deadfall@hotmail.com>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://github.com/yohdeadfall/ordpath/"
 repository = "https://github.com/yohdeadfall/ordpath/"
 description = "Implementation of the ORDPATH hierarchical labeling scheme"
