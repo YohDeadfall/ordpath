@@ -65,11 +65,7 @@ pub(crate) struct Buf<const N: usize> {
 impl<const N: usize> Buf<N> {
     const INLINE_SIZE_LEN: usize = {
         const fn max(lhs: usize, rhs: usize) -> usize {
-            if lhs > rhs {
-                lhs
-            } else {
-                rhs
-            }
+            if lhs > rhs { lhs } else { rhs }
         }
 
         const fn meta_size(data_len: usize) -> usize {
